@@ -128,7 +128,7 @@ doc
 --               when passing NULL as CHILD_NUMBER / PLAN_HASH_VALUE to DISPLAY_CURSOR / AWR. Hence a CHILD_NUMBER / PLAN_HASH_VALUE is mandatory, either
 --               implicitly generated (see above) or explicitly passed
 --
---               A note to RAC users: If the current instance was *not* involved in executing the SQL, and the execution plan should be displayed from the Shared Pool (CURR option), in best case the execution plan cannot be found
+-- RAC:          A note to RAC users: If the current instance was *not* involved in executing the SQL, and the execution plan should be displayed from the Shared Pool (CURR option), in best case the execution plan cannot be found
 --               In worst case an incorrect plan will be associated from the local instance Shared Pool (You could have the same SQL_ID / CHILD_NUMBER with different plans in different RAC instances).
 --               Therefore you need to be careful with cross-instance / remote-instance executions in RAC
 --               Why? The tool relies on DBMS_XPLAN.DISPLAY_CURSOR for showing the execution plan from the Shared Pool - but DISPLAY_CURSOR is limited to the local Shared Pool
@@ -147,7 +147,7 @@ doc
 --
 --               MONITOR or ASH: Determines where to search for the last execution. By default the script uses ASH
 --
---               Note that the scripts queries both V$SQL_MONITOR and V$ACTIVE_SESSION_HISTORY to determine the last execution if no SQL_EXEC_START / SQL_EXEC_ID was specified
+--               Note that the scripts queries both GV$SQL_MONITOR and GV$ACTIVE_SESSION_HISTORY to determine the last execution if no SQL_EXEC_START / SQL_EXEC_ID was specified
 --
 --               !! If you don't have a Tuning Pack license but haven't disabled it in the CONTROL_MANAGEMENT_PACK_ACCESS parameter this query might show up as a Tuning Pack feature usage !!
 --
@@ -174,7 +174,7 @@ doc
 --
 --               The official blog post to this version of the tool can be found here:
 --
---               http://oracle-randolf.blogspot.com/2012/08/parallel-execution-analysis-using.html
+--               http://oracle-randolf.blogspot.com/2012/08/parallel-execution-analysis-using-ash.html
 --
 --               It contains a complete description along with the command line reference, notes and examples
 --
@@ -697,7 +697,7 @@ from
 &_IF_ORA11_OR_HIGHER  and     '&so' = 'MONITOR'
 &_IF_ORA11_OR_HIGHER  and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 &_IF_ORA11_OR_HIGHER  and     sql_exec_start = nvl(to_date('&4', '&dm'), sql_exec_start)
-&_IF_ORA11_OR_HIGHER  and     sql_exec_id = nvl('&5', sql_exec_id)
+&_IF_ORA11_OR_HIGHER  and     sql_exec_id = nvl(trim('&5'), sql_exec_id)
 &_IF_ORA11_OR_HIGHER  and     '&1' is not null
 &_IF_ORA11_OR_HIGHER  and     upper(substr('&1', 1, 4)) != 'SID='
 &_IF_ORA11_OR_HIGHER  and     '&2' is null
@@ -717,7 +717,7 @@ from
 &_IF_ORA11_OR_HIGHER  and     '&so' = 'ASH'
 &_IF_ORA11_OR_HIGHER  and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 &_IF_ORA11_OR_HIGHER  and     sql_exec_start = nvl(to_date('&4', '&dm'), sql_exec_start)
-&_IF_ORA11_OR_HIGHER  and     sql_exec_id = nvl('&5', sql_exec_id)
+&_IF_ORA11_OR_HIGHER  and     sql_exec_id = nvl(trim('&5'), sql_exec_id)
 &_IF_ORA11_OR_HIGHER  and     '&1' is not null
 &_IF_ORA11_OR_HIGHER  and     upper(substr('&1', 1, 4)) != 'SID='
 &_IF_ORA11_OR_HIGHER  and     '&2' is null
