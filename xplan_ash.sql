@@ -10,13 +10,13 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      1.0
---               August 2012
+-- Version:      2.0
+--               October 2012
 --
 -- Author:       Randolf Geist
 --               oracle-randolf.blogspot.com
 --
--- Description:  SQL statement execution analysis using ASH (from 11g on)
+-- Description:  SQL statement execution analysis using ASH (from 10.2 on)
 --
 --               Furthermore A free-standing SQL wrapper over DBMS_XPLAN. Provides access to the
 --               DBMS_XPLAN.DISPLAY_CURSOR / DISPLAY_AWR pipelined function for a given SQL_ID and CHILD_NUMBER (PLAN_HASH_VALUE for DISPLAY_AWR)
@@ -30,22 +30,22 @@ doc
 --               In addition ASH data can be reported for the following purposes:
 --
 --               1. Show general information about SQL execution activity
---               2. Provide activity information per SQL plan line id
+--               2. Provide activity information per SQL plan line id (11g+)
 --               3. Show distribution of work between Parallel Slaves / Query Coordinator / RAC Nodes based on ASH data
 --
 --               The ASH data options make this a kind of "real time" monitoring tool. Unfortunately the
---               free ASH implementations lack the correlation to the SQL plan line id, hence this is only
+--               free ASH implementations (and 10g versions) lack the correlation to the SQL plan line id, hence this is only
 --               possible with the original ASH implementation from 11g onwards
 --
 --               Note that this script supports in principle other ASH sources - everything can be configured below
 --
 --               A second configuration set is provided that is based on DBA_HIST_ACTIVE_SESS_HISTORY for running analysis on historic ASH data
---               Although the sample frequency of 10 seconds limits the significance of the analysis it might much better than nothing at all
+--               Although the sample frequency of 10 seconds limits the significance of the analysis it might be much better than nothing at all
 --
 --               !! The ASH reporting requires at least Enterprise Edition plus the Diagnostic Pack license !!
 --
 -- Versions:     This utility will work from version 10.2 and later
---               The ASH based information is only available from 11g on (10g has ASH but no relation to SQL execution instances or SQL plan lines)
+--               The ASH based information on plan line level is only available from 11g on (10g has ASH but no relation to SQL execution instances or SQL plan lines)
 --
 --               Tested with database versions 10.2.0.4, 10.2.0.5, 11.1.0.7, 11.2.0.1, 11.2.0.2 and 11.2.0.3
 --
@@ -58,15 +58,17 @@ doc
 --
 --               In addition the script directly queries
 --               1) (G)V$SESSION
---               2) V$SQL_PLAN / V$SQL_PLAN_STATISTICS_ALL (DBA_HIST_SQL_PLAN)
---               3) V$SQL
+--               2) GV$SQL_PLAN / GV$SQL_PLAN_STATISTICS_ALL (DBA_HIST_SQL_PLAN)
+--               3) GV$SQL
 --               4) GV$SQL_MONITOR
 --               5) GV$ACTIVE_SESSION_HISTORY (DBA_HIST_ACTIVE_SESS_HISTORY)
 --               6) V$DATABASE
 --
--- Note:         This script writes two files during execution, hence it requires write access to the current working directory
+-- Note:         This script writes two files during execution (.xplan_ash_temp and .xplan_ash_settings), hence it requires write access to the current working directory
 --
---               If you see the following error messages during execution:
+--               If you see some of the following error messages during execution:
+--
+--               SP2-0103: Nothing in SQL buffer to run.
 --
 --               SP2-0110: Cannot create save file ".xplan_ash_temp"
 --
@@ -75,6 +77,11 @@ doc
 --               ERROR at line 14:
 --               ORA-00933: SQL command not properly ended
 --
+--               plan_operations as
+--                               *
+--               ERROR at line 2:
+--               ORA-00900: invalid SQL statement
+--
 --               then you cannot write to your current working directory
 --
 -- Credits:      Based on the original XPLAN implementation by Adrian Billington (http://www.oracle-developer.net/utilities.php
@@ -82,7 +89,7 @@ doc
 --               and inspired by Kyle Hailey's TCF query (http://dboptimizer.com/2011/09/20/display_cursor/)
 --
 -- Features:     In addition to the PID (The PARENT_ID) and ORD (The order of execution, note that this doesn't account for the special cases so it might be wrong)
---               columns added by Adrian's wrapper the following additional columns over ALLSTATS are available (see column configuration where it can be customized which to show):
+--               columns added by Adrian's wrapper the following additional execution plan columns over ALLSTATS are available (see column configuration where it can be customized which to show):
 --
 --               A_TIME_SELF        : The time taken by the operation itself - this is the operation's cumulative time minus the direct descendants operation's cumulative time
 --               LIO_SELF           : The LIOs done by the operation itself - this is the operation's cumulative LIOs minus the direct descendants operation's cumulative LIOs
@@ -98,7 +105,7 @@ doc
 --
 --               More information including demos can be found online at http://oracle-randolf.blogspot.com/2011/12/extended-displaycursor-with-rowsource.html
 --
---               The following information is available based on ASH data. Note that this can be configured in two ways:
+--               The following information is available based on ASH data (from 11g on). Note that this can be configured in two ways:
 --               - The "options" determine what information will be queried / shown in general (see below for more details)
 --               - The column configuration can be used to customize exactly which columns to show as part the execution plan output (if available)
 --
@@ -114,13 +121,13 @@ doc
 --               The default value for N is 5, but can be changed in the configuration section below, for both "Parallel Distribution ASH" and the "Top N Activity ASH".
 --               You can also configure the width of the ASH graphs and the character used for the "Graphs" and "Act" column
 --
--- Usage:        @xplan_ash.sql [sql_id|sid=<nnn>[@<inst_id>]] [cursor_child_number (plan_hash_value for the historic ASH)] [DBMS_XPLAN_format_option] [SQL_EXEC_START] [SQL_EXEC_ID] [MONITOR|*ASH*] [[*ASH*][,][DISTRIB|*DISTRIB_REL*|DISTRIB_TOT][,][*TIMELINE*]|[NONE]] [*CURR*|HIST|MIXED] [comma_sep_column_list_to_show/hide]
+-- Usage:        @xplan_ash.sql [sql_id|sid=<nnn>[@<inst_id>]] [cursor_child_number (plan_hash_value for the historic ASH)] [DBMS_XPLAN_format_option] [SQL_EXEC_START] [SQL_EXEC_ID (SQL_EXEC_END for pre-11g)] [MONITOR|*ASH*] [[*ASH*][,][DISTRIB|*DISTRIB_REL*|DISTRIB_TOT][,][*TIMELINE*]|[NONE]] [*CURR*|HIST|MIXED] [comma_sep_column_list_to_show/hide]
 --
 --               If both the SQL_ID and CHILD_NUMBER are omitted the previously executed SQL_ID and CHILD_NUMBER of the session will be used
 --
 --               If the SQL_ID is specified but the CHILD_NUMBER / PLAN_HASH_VALUE is omitted then
 --               - If the ASH options are disabled then CHILD_NUMBER 0 is assumed
---               - If ASH / Real-Time SQL Monitoring should be queried, the corresponding CHILD_NUMBER / PLAN_HASH_VALUE will be looked up based on the remaining option specified
+--               - If ASH / Real-Time SQL Monitoring should be queried, the corresponding CHILD_NUMBER / PLAN_HASH_VALUE will be looked up based on the remaining options specified
 --
 --               If instead of a SQL_ID SID=<nnn>[@<inst_id>] is specified as first argument, the current or previous execution of the corresponding SID will be used, if available. Optionally the SID's instance can be specified for RAC
 --
@@ -128,23 +135,31 @@ doc
 --               when passing NULL as CHILD_NUMBER / PLAN_HASH_VALUE to DISPLAY_CURSOR / AWR. Hence a CHILD_NUMBER / PLAN_HASH_VALUE is mandatory, either
 --               implicitly generated (see above) or explicitly passed
 --
--- RAC:          A note to RAC users: If the current instance was *not* involved in executing the SQL, and the execution plan should be displayed from the Shared Pool (CURR option), in best case the execution plan cannot be found
+-- RAC:          A note to RAC users below 11.2.0.2: If the current instance was *not* involved in executing the SQL, and the execution plan should be displayed from the Shared Pool (CURR option), in best case the execution plan cannot be found
 --               In worst case an incorrect plan will be associated from the local instance Shared Pool (You could have the same SQL_ID / CHILD_NUMBER with different plans in different RAC instances).
 --               Therefore you need to be careful with cross-instance / remote-instance executions in RAC
 --               Why? The tool relies on DBMS_XPLAN.DISPLAY_CURSOR for showing the execution plan from the Shared Pool - but DISPLAY_CURSOR is limited to the local Shared Pool
 --
---               Below are already ideas mentioned how this can be addressed in a future version
+--               From 11.2.0.2 a workaround is implemented that can "remotely" execute DBMS_XPLAN.DISPLAY_CURSOR on the RAC instance where the correct plan should be in the Library Cache
 --
 --               The default formatting option for the call to DBMS_XPLAN.DISPLAY_CURSOR / AWR is ADVANCED
 --
+--               For 11g+:
 --               SQL_EXEC_START: This is required to determine the exact instance of statement execution in ASH. It is a date in format "YYYY-MM-DD HH24:MI:SS" (date mask can be changed in the configuration section)
 --               SQL_EXEC_ID   : Also required for the same purpose
 --
---               If these two are omitted and the SID and previous session execution cases don't apply then the last execution is searched in either V$SQL_MONITOR (MONITOR) or V$ACTIVE_SESSION_HISTORY (the default ASH option)
+--               If these two are omitted and the SID and previous session execution cases don't apply then the last execution is searched in either GV$SQL_MONITOR (MONITOR) or GV$ACTIVE_SESSION_HISTORY (the default ASH option)
 --               The latter option is required if no Tuning Pack license is available, the former option can be used to make sure that the script finds the same latest execution instance as the Real-Time SQL Monitoring
 --
 --               This information is used as filter on SQL_EXEC_START and SQL_EXEC_ID in ASH. Together with the SQL_ID it uniquely identifies an execution instance of that SQL
 --
+--               For 10.2:
+--               SQL_EXEC_START: This is always mandatory and determines the start samples in ASH. It is a date in format "YYYY-MM-DD HH24:MI:SS" (date mask can be changed in the configuration section)
+--               SQL_EXEC_END  : This is always mandatory and determines the end samples in ASH. It is a date in format "YYYY-MM-DD HH24:MI:SS" (date mask can be changed in the configuration section)
+--
+--               For 10.2 these two are mandatory since an exact SQL execution instance cannot be identified in pre-11g ASH data
+--
+--               For 11g+:
 --               MONITOR or ASH: Determines where to search for the last execution. By default the script uses ASH
 --
 --               Note that the scripts queries both GV$SQL_MONITOR and GV$ACTIVE_SESSION_HISTORY to determine the last execution if no SQL_EXEC_START / SQL_EXEC_ID was specified
@@ -172,102 +187,60 @@ doc
 --
 --               This tool is free but comes with no warranty at all - use at your own risk
 --
---               The official blog post to this version of the tool can be found here:
+--               The official blog post for version 1.0 of the tool can be found here:
 --
 --               http://oracle-randolf.blogspot.com/2012/08/parallel-execution-analysis-using-ash.html
 --
+--               The official blog post for version 2.0 of the tool can be found here:
+--
+--               http://oracle-randolf.blogspot.com/2012/10/new-version-of-xplanash-utility.html
+--
+--               You can find all related posts following this link:
+--               http://oracle-randolf.blogspot.com/search/label/XPLAN_ASH
+--
 --               It contains a complete description along with the command line reference, notes and examples
 --
+-- Experimental: There is a global switch _EXPERIMENTAL at the beginning of the configuration section below.
+--               By default this is disabled because the stuff shown could be called "unreliable" and potentially "misleading" information.
+--
+--               If you enable it by setting the configuration switch to an empty string, the I/O figures from the ASH data (only from 11.2+ on)
+--               will be shown at various places of the report. Note that this data is unreliable and usually falls short of
+--               the actual activity (I've never seen it reporting more than the actual activities). Since sometimes unreliable
+--               figures can be much better than nothing at all you can enable it that in cases where you want for example get an
+--               idea if the I/O was in the range of MBs or GBs - this is something you should be able to tell from the ASH data
+--
+--               Likewise the average and median wait times from ASH will be shown at different places of the report if experimental is turned on.
+--               It is important to understand what these wait times are: These are waits that were "in-flight", not completed when the sampling took place.
+--               Doing statistical analysis based on such sampled, in-flight wait times is sometimes called "Bad ASH math", but again, if you know what you are doing
+--               and keep telling yourself what you're looking at, there might be cases where this information could be useful, for example, if you see that
+--               hundreds or thousands of those "in-flight" waits were sampled with a typical wait time of 0.5 secs where you expect a typical wait time of 0.005 secs.
+--               This might be an indicator that something was broken or went wrong and could be worth further investigation.
+--
+-- Change Log:
+--               1.0: August 2012
+--                    Initial release
+--
+--               2.0: October 2012
+--                    - Access check
+--                    - Conditional compilation for different database versions
+--                    - Additional activity summary (when enabling "experimenal" including average and median wait times)
+--                    - Concurrent activity information (what is going on at the same time as this SQL statement executes)
+--                    - Experimental stuff: Additional I/O summary
+--                    - More pretty printing
+--                    - Experimental stuff: I/O added to Average Active Session Graph (renamed to Activity Timeline)
+--                    - Top Execution Plan Lines and Top Activities added to Activity Timeline
+--                    - Activity Timeline is now also shown for serial execution when TIMELINE option is specified
+--                    - From 11.2.0.2 on: We get the ACTUAL DOP from the undocumented PX_FLAGS column added to ASH
+--                    - All relevant XPLAN_ASH queries are now decorated so it should be easy to identify them in the Library Cache
+--                    - More samples are now covered and a kind of "read consistency" across queries on ASH is introduced
+--                    - From 11.2.0.2 on: Executions plans are now pulled from the remote RAC instance Library Cache if necessary
+--                    - Separate Parallel Slave activity overview
+--                    - Limited support for Oracle 10.2 ASH
+--
 -- Ideas:        - Include GV$SESSION_LONGOPS information
---               - Show Parallel Slave overview similar to Real-Time SQL Monitoring
---               - Show MAX PGA / TEMP usage
+--               - Show information about the session identified
+--               - Show MAX PGA / TEMP usage for Activity Timeline
 --
---               - Capture more ASH samples
---
---                 This is how Real-Time SQL Monitoring restricts the samples:
-/*
-set echo on verify on
-
-column pred1           new_value ash_pred1
-column pred2           new_value ash_pred2
-column pred3           new_value ash_pred3
-column pred1_val       new_value ash_pred1_val
-column pred2_val       new_value ash_pred2_val
-column pred3_val       new_value ash_pred3_val
-column min_sample_time new_value ash_min_sample_time
-column max_sample_time new_value ash_max_sample_time
-
-select
-        max(pred1)                                                       as pred1
-      , max(pred2) keep (dense_rank last order by pred1 nulls first)     as pred2
-      , max(pred3) keep (dense_rank last order by pred1 nulls first)     as pred3
-      , max(pred1_val) keep (dense_rank last order by pred1 nulls first) as pred1_val
-      , max(pred2_val) keep (dense_rank last order by pred1 nulls first) as pred2_val
-      , max(pred3_val) keep (dense_rank last order by pred1 nulls first) as pred3_val
-      , to_char(min(sql_exec_start), 'YYYY-MM-DD HH24:MI:SS')            as min_sample_time
-      , to_char(max(cast(sample_time as date)), 'YYYY-MM-DD HH24:MI:SS') as max_sample_time
-from
-        (
-          select
-                  case when qc_instance_id is null then 'inst_id' else 'qc_instance_id' end             as pred1
-                , case when qc_instance_id is null then 'session_id' else 'qc_session_id' end           as pred2
-                , case when qc_instance_id is null then 'session_serial#' else 'qc_session_serial#' end as pred3
-                , case when qc_instance_id is null then inst_id else qc_instance_id end                 as pred1_val
-                , case when qc_instance_id is null then session_id else qc_session_id end               as pred2_val
-                , case when qc_instance_id is null then session_serial# else qc_session_serial# end     as pred3_val
-                , sql_exec_start
-                , sample_time
-          from
-                  gv$active_session_history
-          where
-                  sql_id = '&si'
-          and     sql_exec_start = to_date('&ses', 'YYYY-MM-DD HH24:MI:SS')
-          and     sql_exec_id = &sei
-        )
-;
-
-column pred1           clear
-column pred2           clear
-column pred3           clear
-column pred1_val       clear
-column pred2_val       clear
-column pred3_val       clear
-column min_sample_time clear
-column max_sample_time clear
-
-
-select count(*) from gv$active_session_history
-where
-        sql_id = '&si'
-and     &ash_pred1 = &ash_pred1_val
-and     &ash_pred2 = &ash_pred2_val
-and     &ash_pred3 = &ash_pred3_val
-and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
-;
-
-select count(*) from gv$active_session_history
-where
-        sql_id = '&si'
-and     sql_exec_start = to_date('&ses', 'YYYY-MM-DD HH24:MI:SS')
-and     sql_exec_id = &sei
-;
-
-undefine ash_pred1
-undefine ash_pred2
-undefine ash_pred3
-undefine ash_pred1_val
-undefine ash_pred2_val
-undefine ash_pred3_val
-undefine ash_min_sample_time
-undefine ash_max_sample_time
-*/
---
---
---               - Get formatted DBMS_XPLAN output from remote instances in RAC
---
---                 This is how DBMS_XPLAN can be (mis-)used to get an execution plan from a remote RAC instance:
-/*
-select * from table(sys.dbms_xplan.display('gv$sql_plan', null, 'ADVANCED', 'inst_id = &inst_id and sql_id = ''&si'' and child_number = &cn'))
 */
 #
 
@@ -278,6 +251,11 @@ set linesize 600 pagesize 0 tab off
 -----------------------------------
 -- Configuration, default values --
 -----------------------------------
+
+/* Configure EXPERIMENTAL stuff (currently I/O summary and figures added to Activity Timeline as well as average / median wait times for Activity Summaries) */
+/* Set this to "" for enabling experimental stuff */
+/* Set this to "--" for disabling experimental stuff */
+define _EXPERIMENTAL = "--"
 
 /* The graph character used for the graphs */
 define gc = "@"
@@ -293,6 +271,12 @@ define topnp = "5"
 
 /* The Top N Activities */
 define topnw = "5"
+
+/* The Top N Plan lines in the Activity Timeline */
+define topnl = "3"
+
+/* The Top N Activities in the Activity Timeline */
+define topna = "3"
 
 /* The Parallel Distribution Graph Size */
 define pgs = "32"
@@ -351,9 +335,9 @@ define curr_global_ash = "gv$active_session_history"
 define curr_inst_id = "inst_id"
 
 /* Plan tables */
-define curr_plan_table = "v$sql_plan"
+define curr_plan_table = "gv$sql_plan"
 
-define curr_plan_table_stats = "v$sql_plan_statistics_all"
+define curr_plan_table_stats = "gv$sql_plan_statistics_all"
 
 /* Plan table second identifier */
 define curr_second_id = "child_number"
@@ -370,6 +354,9 @@ define curr_plan_function = "dbms_xplan.display_cursor"
 /* In 10g we can't use named parameters for function calls */
 /* So we need a bit of flexibility here when using different plan functions */
 define curr_par_fil = ""
+
+/* For current ASH we need the instance_id in addition for remote instance executions */
+define curr_third_id = "''''p.inst_id = '''' || :inst_id"
 
 /* Configuration for historical ASH */
 
@@ -401,6 +388,9 @@ define hist_plan_function = "dbms_xplan.display_awr"
 /* DISPLAY_AWR has an additional parameter DB_ID */
 define hist_par_fil = "null,"
 
+/* For historic ASH we don't need the instance_id in addition for remote instance executions */
+define hist_third_id = "''''1 = 1 --'''' || :inst_id"
+
 /* Configuration for mixed execution plan from AWR but data from recent ASH / */
 
 /* ASH repository */
@@ -430,6 +420,9 @@ define mixed_plan_function = "dbms_xplan.display_awr"
 /* So we need a bit of flexibility here when using different plan functions */
 define mixed_par_fil = "null,"
 
+/* For mixed ASH we don't need the instance_id in addition for remote instance executions */
+define mixed_third_id = "''''1 = 1 --'''' || :inst_id"
+
 -----------------------
 -- Preparation steps --
 -----------------------
@@ -446,26 +439,8 @@ variable prev_sql_exec_id    number
 
 /* Get the previous command as default
    if no SQL_ID / CHILD_NUMBER is passed */
-/* Can't determine yet the database version
-   so need to catch the exception and use a different
-   SQL for pre-11g */
-declare
-  e_invalid_identifier_904 exception;
-  pragma exception_init(e_invalid_identifier_904, -904);
 begin
-  execute immediate '
-  select
-          prev_sql_id
-        , prev_child_number
-        , to_char(prev_exec_start, ''&dm'') as prev_sql_exec_start
-        , prev_exec_id                      as prev_sql_exec_id
-  from
-          v$session
-  where
-          sid = userenv(''sid'')'
-  into :prev_sql_id, :prev_child_number, :prev_sql_exec_start, :prev_sql_exec_id;
-exception
-when e_invalid_identifier_904 then
+  $IF DBMS_DB_VERSION.VERSION < 11 $THEN
   execute immediate '
   select
           prev_sql_id
@@ -476,6 +451,18 @@ when e_invalid_identifier_904 then
           v$session
   where
           sid = userenv(''sid'')'
+  $ELSE
+  execute immediate '
+  select
+          prev_sql_id
+        , prev_child_number
+        , to_char(prev_exec_start, ''&dm'') as prev_sql_exec_start
+        , prev_exec_id                      as prev_sql_exec_id
+  from
+          v$session
+  where
+          sid = userenv(''sid'')'
+  $END
   into :prev_sql_id, :prev_child_number, :prev_sql_exec_start, :prev_sql_exec_id;
 end;
 /
@@ -488,6 +475,105 @@ select
 from
          dual
 ;
+
+/* Perform an access check on all objects that might be used and cause a failure */
+variable access_check varchar2(4000)
+
+declare
+  type t_check_list is table of varchar2(30);
+  $IF DBMS_DB_VERSION.VERSION < 11 $THEN
+  a_check_list t_check_list := t_check_list('DUAL', 'V$SESSION', 'GV$SESSION', 'V$DATABASE', 'GV$ACTIVE_SESSION_HISTORY', 'GV$SQL_PLAN', 'GV$SQL_PLAN_STATISTICS_ALL', 'V$VERSION', 'GV$SQL', 'DBA_HIST_ACTIVE_SESS_HISTORY', 'DBA_HIST_SQL_PLAN');
+  $ELSE
+  a_check_list t_check_list := t_check_list('DUAL', 'V$SESSION', 'GV$SESSION', 'V$DATABASE', 'GV$ACTIVE_SESSION_HISTORY', 'GV$SQL_PLAN', 'GV$SQL_PLAN_STATISTICS_ALL', 'V$VERSION', 'GV$SQL_MONITOR', 'GV$SQL', 'DBA_HIST_ACTIVE_SESS_HISTORY', 'DBA_HIST_SQL_PLAN');
+  $END
+  s_dummy varchar2(1);
+  s_result varchar2(4000);
+begin
+  for i in a_check_list.first..a_check_list.last loop
+    begin
+      execute immediate 'select to_char(null) as dummy from ' || a_check_list(i) || ' where 1 = 2' into s_dummy;
+    exception
+    when NO_DATA_FOUND then
+      null;
+    when others then
+      s_result := s_result || chr(10) || 'Error ORA' || to_char(SQLCODE, '00000') || ' when accessing ' || a_check_list(i);
+    end;
+  end loop;
+  s_result := ltrim(s_result, chr(10));
+  :access_check := s_result;
+end;
+/
+
+set termout on
+
+set heading off feedback off
+
+column message format a100
+
+select
+        '----------------------------------------------------------------------------------------------' as message
+from
+        dual
+where
+        :access_check is not null
+---------
+union all
+---------
+select
+        '!!Access Check failed!!'
+from
+        dual
+where
+        :access_check is not null
+---------
+union all
+---------
+select
+        '----------------------------------------------------------------------------------------------'
+from
+        dual
+where
+        :access_check is not null
+---------
+union all
+---------
+select
+        :access_check
+from
+        dual
+where
+        :access_check is not null
+;
+
+column message clear
+
+set heading on feedback on
+
+set termout off
+
+-- Default some defines that cause the script appear to "hang" in case of missing privileges
+-- This is just to avoid the "hang" (waiting for input with termout off) -
+-- these will be populated when operating with proper privileges
+define last_exec_second_id = ""
+define last_exec_start = ""
+define sid_sql_id = ""
+define sid_child_no = ""
+define sid_sql_exec_start = ""
+define child_ad = ""
+define sid_sql_exec_id = ""
+define last_exec_id = ""
+define slave_count = ""
+define ic = ""
+define ds = ""
+define plan_exists = ""
+define plan_inst_id = ""
+define ash_pred1 = "1 = "
+define ash_pred2 = "2"
+define ash_ln_pred1 = "1 = "
+define ash_ln_pred2 = "2"
+define ash_min_sample_time = ""
+define ash_max_sample_time = ""
+define ca_sc = ""
 
 -- The following is a hack to use default
 -- values for defines
@@ -517,10 +603,43 @@ where
         rownum = 0
 ;
 
+-- Some version dependent code switches
+col ora11_higher    new_value _IF_ORA11_OR_HIGHER
+col ora11_lower     new_value _IF_LOWER_THAN_ORA11
+col ora112_higher   new_value _IF_ORA112_OR_HIGHER
+col ora112_lower    new_value _IF_LOWER_THAN_ORA112
+col ora11202_higher new_value _IF_ORA11202_OR_HIGHER
+col ora11202_lower  new_value _IF_LOWER_THAN_ORA11202
+
+select
+        decode(substr(banner, instr(banner, 'Release ') + 8, 2), '11', '',  '--')                                                                             as ora11_higher
+      , decode(substr(banner, instr(banner, 'Release ') + 8, 2), '11', '--',  '')                                                                             as ora11_lower
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2' then '' else '--'     end as ora112_higher
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2' then '--' else ''     end as ora112_lower
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2.0.2' then '' else '--' end as ora11202_higher
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2.0.2' then '--' else '' end as ora11202_lower
+from
+        v$version
+where
+        rownum = 1
+;
+
+/* For versions prior to 11g there is no concept of SQL_EXEC_START / SQL_EXEC_ID */
+/* Hence we require the user to enter simply a start and end date for the ASH samples to use */
+column sql_exec2 new_value _SQL_EXEC2
+
+select
+&_IF_LOWER_THAN_ORA11         'SQL_EXEC_END (format "&dm")' as sql_exec2
+&_IF_ORA11_OR_HIGHER          'SQL_EXEC_ID'                 as sql_exec2
+from
+        dual;
+
+column sql_exec2 clear
+
 --set doc off
 --doc
 /* If you prefer to be prompted for the various options, activate this code block */
-/* Anything you pass on the command line will be used as default here, so can simply add the option you like at the prompts */
+/* Anything you pass on the command line will be used as default here, so you can simply add/amend/overwrite the option you like at the prompts */
 
 set termout on
 
@@ -536,7 +655,7 @@ accept 3 default '&3' prompt 'DBMS_XPLAN.DISPLAY* format option (default &defaul
 prompt Command-line parameter value: &4
 accept 4 default '&4' prompt 'SQL_EXEC_START (format "&dm"): '
 prompt Command-line parameter value: &5
-accept 5 default '&5' prompt 'SQL_EXEC_ID: '
+accept 5 default '&5' prompt '&_SQL_EXEC2: '
 prompt Command-line parameter value: &6
 accept 6 default '&6' prompt 'Source for last exec search (MONITOR/ASH, default &default_source): '
 prompt Command-line parameter value: &7
@@ -550,22 +669,18 @@ accept 9 default '&9' prompt 'Comma separated list of columns to show/hide (defa
 set termout off
 --#
 
--- Some version dependent code switches
-col ora11_higher  new_value _IF_ORA11_OR_HIGHER
-col ora11_lower   new_value _IF_LOWER_THAN_ORA11
-col ora112_higher new_value _IF_ORA112_OR_HIGHER
-col ora112_lower  new_value _IF_LOWER_THAN_ORA112
+set termout on
 
-select
-        decode(substr(banner, instr(banner, 'Release ') + 8, 2), '11', '',  '--')                                                                         as ora11_higher
-      , decode(substr(banner, instr(banner, 'Release ') + 8, 2), '11', '--',  '')                                                                         as ora11_lower
-      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2' then '' else '--' end as ora112_higher
-      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2' then '--' else '' end as ora112_lower
-from
-        v$version
-where
-        rownum = 1
-;
+prompt
+prompt
+prompt XPLAN_ASH V2.0 (C) 2012 Randolf Geist
+prompt http://oracle-randolf.blogspot.com
+prompt
+prompt Initializing...
+prompt ------------------------------------------------
+
+-- If you need to debug, comment the following line
+set termout off
 
 column fo new_value fo
 column so new_value so
@@ -595,6 +710,7 @@ column second_id_monitor new_value second_id_monitor
 column sample_freq       new_value sample_freq
 column plan_function     new_value plan_function
 column par_fil           new_value par_fil
+column third_id          new_value third_id
 
 select
         '&curr_global_ash'        as global_ash
@@ -606,6 +722,7 @@ select
       , '&curr_sample_freq'       as sample_freq
       , '&curr_plan_function'     as plan_function
       , '&curr_par_fil'           as par_fil
+      , '&curr_third_id'          as third_id
 from
         dual
 where
@@ -623,6 +740,7 @@ select
       , '&hist_sample_freq'       as sample_freq
       , '&hist_plan_function'     as plan_function
       , '&hist_par_fil'           as par_fil
+      , '&hist_third_id'          as third_id
 from
         dual
 where
@@ -640,6 +758,7 @@ select
       , '&mixed_sample_freq'       as sample_freq
       , '&mixed_plan_function'     as plan_function
       , '&mixed_par_fil'           as par_fil
+      , '&mixed_third_id'          as third_id
 from
         dual
 where
@@ -652,7 +771,7 @@ column sid_sql_exec_start new_value sid_sql_exec_start
 column sid_sql_exec_id    new_value sid_sql_exec_id
 
 /* Get SQL details from GV$SESSION if a SID is specified */
-select
+select /* XPLAN_ASH GET_SESSION_DETAILS */
 &_IF_ORA11_OR_HIGHER          nvl2(sql_exec_start, sql_id, prev_sql_id)                                as sid_sql_id
 &_IF_LOWER_THAN_ORA11         nvl2(sql_id, sql_id, prev_sql_id)                                        as sid_sql_id
 &_IF_ORA11_OR_HIGHER        , to_char(nvl2(sql_exec_start, sql_child_number, prev_child_number), 'TM') as sid_child_no
@@ -678,20 +797,23 @@ and    (instr('&1', '@') < 1 or regexp_like(trim(substr('&1', instr('&1', '@') +
 ;
 
 column last_exec_second_id new_value last_exec_second_id
+column instance_id         new_value plan_inst_id
 
 /* Identify the CHILD_NUMBER / PLAN_HASH_VALUE if first parameter identifies a SQL_ID and second parameter is null and ASH / Real-Time SQL Monitoring should be queried */
 
 /* One of the following statements will be short-circuited by the optimizer if the ASH / MONITOR condition is not true */
 /* So effectively only one of them will run, the other will not return any data (due to the GROUP BY clause) */
 
-/* This statement is effectively turned into a NOOP in versions below 11g */
-select
+select /* XPLAN_ASH IDENTIFY_SECOND_ID */
 &_IF_ORA11_OR_HIGHER          cast(max(sql_&second_id_monitor) keep (dense_rank last order by sql_exec_start nulls first) as varchar2(30)) as last_exec_second_id
 &_IF_LOWER_THAN_ORA11         '0' as last_exec_second_id
+&_IF_ORA11_OR_HIGHER        , to_char(cast(max(inst_id) keep (dense_rank last order by sql_exec_start nulls first) as varchar2(30)), 'TM') as instance_id
+&_IF_LOWER_THAN_ORA11       , '0' as instance_id
 from
 &_IF_ORA11_OR_HIGHER          gv$sql_monitor
 &_IF_LOWER_THAN_ORA11         dual
-&_IF_ORA11_OR_HIGHER  where
+where
+&_IF_LOWER_THAN_ORA11         1 = 2
 &_IF_ORA11_OR_HIGHER          sql_id = '&1'
 &_IF_ORA11_OR_HIGHER  and     px_qcsid is null
 &_IF_ORA11_OR_HIGHER  and     '&so' = 'MONITOR'
@@ -708,32 +830,42 @@ union all
 ---------
 select
 &_IF_ORA11_OR_HIGHER          to_char(max(sql_&second_id) keep (dense_rank last order by sql_exec_start nulls first), 'TM')                as last_exec_second_id
-&_IF_LOWER_THAN_ORA11         '0' as last_exec_second_id
+&_IF_LOWER_THAN_ORA11         to_char(max(sql_&second_id) keep (dense_rank first order by sample_time - to_timestamp('&4 ', '&dm') nulls last), 'TM')  as last_exec_second_id
+&_IF_ORA11_OR_HIGHER        , to_char(cast(max(case when qc_instance_id is not null then qc_instance_id else &inst_id end) keep (dense_rank last order by sql_exec_start nulls first) as varchar2(30)), 'TM') as instance_id
+&_IF_LOWER_THAN_ORA11       , to_char(cast(max(case when qc_instance_id is not null then qc_instance_id else &inst_id end) keep (dense_rank first order by sample_time - to_timestamp('&4 ', '&dm') nulls last) as varchar2(30)), 'TM') as instance_id
 from
-&_IF_ORA11_OR_HIGHER          &global_ash
-&_IF_LOWER_THAN_ORA11         dual
-&_IF_ORA11_OR_HIGHER  where
-&_IF_ORA11_OR_HIGHER          sql_id = '&1'
-&_IF_ORA11_OR_HIGHER  and     '&so' = 'ASH'
-&_IF_ORA11_OR_HIGHER  and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+        &global_ash
+where
+        sql_id = '&1'
+and     '&so' = 'ASH'
+and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 &_IF_ORA11_OR_HIGHER  and     sql_exec_start = nvl(to_date('&4', '&dm'), sql_exec_start)
 &_IF_ORA11_OR_HIGHER  and     sql_exec_id = nvl(trim('&5'), sql_exec_id)
-&_IF_ORA11_OR_HIGHER  and     '&1' is not null
-&_IF_ORA11_OR_HIGHER  and     upper(substr('&1', 1, 4)) != 'SID='
-&_IF_ORA11_OR_HIGHER  and     '&2' is null
+&_IF_LOWER_THAN_ORA11 and     sample_time between to_timestamp('&4', '&dm') and to_timestamp('&5', '&dm') + interval '1' second
+and     '&1' is not null
+and     upper(substr('&1', 1, 4)) != 'SID='
+and     '&2' is null
 group by
         1
 ;
 
+select
+        nvl('&plan_inst_id', '0') as instance_id
+from
+        dual;
+
+column instance_id     clear
+
 /* Turn the Real-Time SQL Monitoring CHILD_ADDRESS into a CHILD_NUMBER */
 
-select
+select  /* XPLAN_ASH CHILD_ADDRESS_TO_CHILD_NUMBER */
         to_char(child_number, 'TM') as last_exec_second_id
 from
-        v$sql
+        gv$sql
 where
         sql_id = '&1'
 and     child_address = hextoraw('&last_exec_second_id')
+and     inst_id = &plan_inst_id
 and     '&so' = 'MONITOR'
 and     upper('&second_id_monitor') = 'CHILD_ADDRESS'
 and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
@@ -850,7 +982,7 @@ from
 
 column plan_table_name new_value plan_table_name
 
-/* Get plan info from V$SQL_PLAN_STATISTICS_ALL or V$SQL_PLAN */
+/* Get plan info from GV$SQL_PLAN_STATISTICS_ALL or GV$SQL_PLAN */
 select
         case
         when instr('&fo', 'STATS') > 0
@@ -863,14 +995,15 @@ from
 
 column child_ad new_value child_ad
 
--- Get child address for querying V$SQL_MONITOR
-select
+-- Get child address for querying GV$SQL_MONITOR
+select  /* XPLAN_ASH CHILD_NUMBER_TO_CHILD_ADDRESS */
         rawtohex(child_address) as child_ad
 from
-        v$sql
+        gv$sql
 where
         sql_id = '&si'
 and     child_number = &cn
+and     inst_id = &plan_inst_id
 and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 and     coalesce('&sid_sql_exec_start', '&4') is null and '&1' is not null
 and     upper('&second_id_monitor') = 'CHILD_ADDRESS'
@@ -885,7 +1018,7 @@ column last_exec_id new_value last_exec_id
 /* So effectively only one of them will run, the other will not return any data (due to the GROUP BY clause) */
 
 /* This statement is effectively turned into a NOOP in versions below 11g */
-select
+select /* XPLAN_ASH SEARCH_LAST_EXECUTION */
 &_IF_ORA11_OR_HIGHER          to_char(max(sql_exec_start), '&dm')                                                        as last_exec_start
 &_IF_ORA11_OR_HIGHER        , to_char(max(sql_exec_id) keep (dense_rank last order by sql_exec_start nulls first), 'TM') as last_exec_id
 &_IF_LOWER_THAN_ORA11         ''   as last_exec_start
@@ -893,13 +1026,15 @@ select
 from
 &_IF_ORA11_OR_HIGHER          gv$sql_monitor
 &_IF_LOWER_THAN_ORA11         dual
-&_IF_ORA11_OR_HIGHER  where
+where
+&_IF_LOWER_THAN_ORA11         1 = 2
 &_IF_ORA11_OR_HIGHER          sql_id = '&si'
 &_IF_ORA11_OR_HIGHER  and     sql_&second_id_monitor = case when upper('&second_id_monitor') = 'CHILD_ADDRESS' then '&child_ad' else '&cn' end
 &_IF_ORA11_OR_HIGHER  and     px_qcsid is null
 &_IF_ORA11_OR_HIGHER  and     '&so' = 'MONITOR'
 &_IF_ORA11_OR_HIGHER  and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 &_IF_ORA11_OR_HIGHER  and     coalesce('&sid_sql_exec_start', '&4') is null and '&1' is not null
+and     '&_IF_ORA11_OR_HIGHER' is null
 group by
         1
 ---------
@@ -911,14 +1046,16 @@ select
 &_IF_LOWER_THAN_ORA11         ''  as last_exec_start
 &_IF_LOWER_THAN_ORA11       , '0' as last_exec_id
 from
-&_IF_ORA11_OR_HIGHER          &global_ash
+&_IF_ORA11_OR_HIGHER          &global_ash ash
 &_IF_LOWER_THAN_ORA11         dual
-&_IF_ORA11_OR_HIGHER  where
+where
+&_IF_LOWER_THAN_ORA11         1 = 2
 &_IF_ORA11_OR_HIGHER          sql_id = '&si'
 &_IF_ORA11_OR_HIGHER  and     sql_&second_id = &cn
 &_IF_ORA11_OR_HIGHER  and     '&so' = 'ASH'
 &_IF_ORA11_OR_HIGHER  and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 &_IF_ORA11_OR_HIGHER  and     coalesce('&sid_sql_exec_start', '&4') is null and '&1' is not null
+and     '&_IF_ORA11_OR_HIGHER' is null
 group by
         1
 ;
@@ -943,6 +1080,130 @@ from
         dual
 ;
 
+/* Define the actual query on ASH for samples */
+/* Not all samples for a SQL execution are marked with SQL_EXEC_START / SQL_EXEC_ID */
+/* So in order to include those samples a little bit of logic is required */
+/* This logic here is inspired by Real-Time SQL Monitoring */
+/* In order to support other ASH sources this query needs to be adjusted along with
+   the parameters that define the valid ASH samples */
+/* This query here restricts the ASH data to the session information identified */
+/* The actual ASH queries will use the clauses determined here along with the SQL_ID plus start / end sample time */
+column pred1           new_value ash_pred1
+column pred2           new_value ash_pred2
+column ln_pred1        new_value ash_ln_pred1
+column ln_pred2        new_value ash_ln_pred2
+column instance_id     new_value plan_inst_id
+column min_sample_time new_value ash_min_sample_time
+column max_sample_time new_value ash_max_sample_time
+
+select  /* XPLAN_ASH DEFINE_ASH_SAMPLES */
+        pred1
+      , pred2
+      , ln_pred1
+      , ln_pred2
+      , instance_id
+      , to_char(sql_exec_start, 'YYYY-MM-DD HH24:MI:SS')  as min_sample_time
+      , to_char(max_sample_time, 'YYYY-MM-DD HH24:MI:SS') as max_sample_time
+from
+        (
+          select
+                  max_sample_time
+                  /* For versions that support the GV$() special table function we can actually refer to the instance where the execution was started */
+                  /* For prior versions this is deliberately limited to the current instance to get at least a consistent behaviour */
+                  /* Although this might mean either getting no plan at all or in worst case getting a wrong plan from the local Library Cache */
+&_IF_ORA11202_OR_HIGHER                 , to_char(case when qc_instance_id is not null then qc_instance_id else instance_id end, 'TM')                                                                       as instance_id
+&_IF_LOWER_THAN_ORA11202                , sys_context('USERENV', 'INSTANCE')                                                                                                                                 as instance_id
+                , '((ash.&inst_id = '           || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') ||
+                  ' and ash.session_id = '      || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') ||
+                  ' and ash.session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') || ')'       as pred1
+                , case when qc_instance_id is not null then
+                  'or (ash.qc_instance_id = ' || to_char(qc_instance_id, 'TM') ||
+                  ' and ash.qc_session_id = ' || to_char(qc_session_id, 'TM') ||
+&_IF_ORA11_OR_HIGHER                    ' and ash.qc_session_serial# = ' || to_char(qc_session_serial#, 'TM') ||
+                  '))'
+                  else
+                  ')'
+                  end                                                                                                                                            as pred2
+                , '((lnnvl(ash.&inst_id = '          || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') || ')' ||
+                  ' or lnnvl(ash.session_id = '      || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') || ')' ||
+                  ' or lnnvl(ash.session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') || '))' as ln_pred1
+                , case when qc_instance_id is not null then
+                  'and (lnnvl(ash.qc_instance_id = ' || to_char(qc_instance_id, 'TM') || ')' ||
+                  ' or lnnvl(ash.qc_session_id = ' || to_char(qc_session_id, 'TM') || ')' ||
+&_IF_ORA11_OR_HIGHER                    ' or lnnvl(ash.qc_session_serial# = ' || to_char(qc_session_serial#, 'TM') || ')' ||
+                  '))'
+                  else
+                  ')'
+                  end                                                                                                                                                                                        as ln_pred2
+                , sql_exec_start
+          from
+                  (
+                    select
+                            min(sql_exec_start)                                                                     as sql_exec_start
+                          , max(cast(sample_time as date))                                                          as max_sample_time
+&_IF_ORA11_OR_HIGHER                            , max(instance_id) keep (dense_rank last order by cnt, sample_time nulls first)           as instance_id
+&_IF_LOWER_THAN_ORA11                           , max(instance_id) keep (dense_rank first order by sample_time - to_timestamp('&ls ', '&dm') nulls last)         as instance_id
+&_IF_ORA11_OR_HIGHER                            , max(session_id) keep (dense_rank last order by cnt, sample_time nulls first)         as session_id
+&_IF_LOWER_THAN_ORA11                           , max(session_id) keep (dense_rank first order by sample_time - to_timestamp('&ls ', '&dm') nulls last)       as session_id
+&_IF_ORA11_OR_HIGHER                            , max(session_serial#) keep (dense_rank last order by cnt, sample_time nulls first)    as session_serial#
+&_IF_LOWER_THAN_ORA11                           , max(session_serial#) keep (dense_rank first order by sample_time - to_timestamp('&ls ', '&dm') nulls last)  as session_serial#
+&_IF_ORA11_OR_HIGHER                            , max(qc_instance_id) keep (dense_rank last order by cnt, sample_time nulls first)     as qc_instance_id
+&_IF_LOWER_THAN_ORA11                           , max(qc_instance_id) keep (dense_rank first order by sample_time - to_timestamp('&ls ', '&dm') nulls last)   as qc_instance_id
+&_IF_ORA11_OR_HIGHER                            , max(qc_session_id) keep (dense_rank last order by cnt, sample_time nulls first)      as qc_session_id
+&_IF_LOWER_THAN_ORA11                           , max(qc_session_id) keep (dense_rank first order by sample_time - to_timestamp('&ls ', '&dm') nulls last)    as qc_session_id
+&_IF_ORA11_OR_HIGHER                            , max(qc_session_serial#) keep (dense_rank last order by cnt, sample_time nulls first) as qc_session_serial#
+&_IF_LOWER_THAN_ORA11                           , null                                                                                 as qc_session_serial#
+                    from
+                            (
+                              select
+&_IF_ORA11_OR_HIGHER                                        sql_exec_start
+&_IF_LOWER_THAN_ORA11                                       to_date('&ls', '&dm')   as sql_exec_start
+                                    , sample_time
+                                    , &inst_id                as instance_id
+                                    , session_id
+                                    , session_serial#
+                                    , qc_instance_id
+                                    , qc_session_id
+&_IF_ORA11_OR_HIGHER                                      , qc_session_serial#
+                                    , count(*) over (partition by
+                                                     case when qc_instance_id is not null
+                                                     then qc_instance_id || ',' || qc_session_id
+&_IF_ORA11_OR_HIGHER                                                       || ',' || qc_session_serial#
+                                                     else &inst_id || ',' || session_id || ',' || session_serial# end)         as cnt
+                              from
+                                      &global_ash ash
+                              where
+                                      sql_id = '&si'
+&_IF_ORA11_OR_HIGHER                               and     sql_exec_start = to_date('&ls', '&dm')
+&_IF_ORA11_OR_HIGHER                               and     sql_exec_id = &li
+&_IF_LOWER_THAN_ORA11                              and     sample_time >= to_timestamp('&ls', '&dm') and sample_time < to_timestamp('&li', '&dm') + interval '1' second
+                            )
+                  )
+        )
+;
+
+column pred1           clear
+column pred2           clear
+column ln_pred1        clear
+column ln_pred2        clear
+column instance_id     clear
+column min_sample_time clear
+column max_sample_time clear
+
+/* Determine any additional filters on the plan tables for remote RAC executions */
+variable out_third_id varchar2(100)
+
+exec execute immediate 'select &third_id as add_filter from dual' into :out_third_id using '&plan_inst_id'
+
+column third_id new_value third_id
+
+select
+        :out_third_id as third_id
+from
+        dual;
+
+column third_id clear
+
 /* Check if a plan can be found */
 column plan_exists new_value plan_exists
 
@@ -953,6 +1214,7 @@ from
 where
         p.sql_id = '&si'
 and     p.&second_id = &cn
+and     &third_id
 and     rownum <= 1
 ;
 
@@ -960,7 +1222,7 @@ and     rownum <= 1
 -- Actual output starts here --
 -------------------------------
 
-set termout on pagesize 999 heading on feedback off newpage 1 numwidth 10 numformat "" null ""
+set termout on pagesize 999 heading on feedback off newpage 1 numwidth 10 numformat "" null "" colsep "|" headsep "|"
 
 set heading off
 
@@ -989,10 +1251,11 @@ set heading on
 prompt
 prompt
 prompt General information
-prompt -----------------------------------------------
+prompt ------------------------------------------------
 
 column sql_id           format a13
 column sql_exec_start   format a19
+column sql_exec_end     format a19
 column format_option    format a25
 column last_exec_source format a16
 column ash_options      format a24
@@ -1001,18 +1264,20 @@ column ash_source       format a10
 select
         '&si' as sql_id
       , &cn   as &second_id
-&_IF_ORA11_OR_HIGHER        , '&ls' as sql_exec_start
+      , '&ls' as sql_exec_start
 &_IF_ORA11_OR_HIGHER        , &li   as sql_exec_id
+&_IF_LOWER_THAN_ORA11       , '&li'   as sql_exec_end
       , '&fo' as format_option
-&_IF_ORA11_OR_HIGHER        , case
-&_IF_ORA11_OR_HIGHER          when '&sid_sql_id' is not null
-&_IF_ORA11_OR_HIGHER          then upper('&1')
+      , case
+        when '&sid_sql_id' is not null
+        then upper('&1')
 &_IF_ORA11_OR_HIGHER          when '&1' is null and '&4' is null
-&_IF_ORA11_OR_HIGHER          then 'PREV_SQL'
-&_IF_ORA11_OR_HIGHER          when '&4' is not null
-&_IF_ORA11_OR_HIGHER          then 'N/A'
-&_IF_ORA11_OR_HIGHER          else '&so'
-&_IF_ORA11_OR_HIGHER          end   as last_exec_source
+&_IF_LOWER_THAN_ORA11         when '&1' is null
+        then 'PREV_SQL'
+        when '&4' is not null
+        then 'N/A'
+        else '&so'
+        end   as last_exec_source
       , '&op' as ash_options
       , '&ah' as ash_source
 from
@@ -1021,17 +1286,49 @@ from
 
 column sql_id           clear
 column sql_exec_start   clear
+column sql_exec_end     clear
 column format_option    clear
 column last_exec_source clear
 column ash_options      clear
 column ash_source       clear
 
-prompt
-prompt
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+---------
+union all
+---------
+select
+        'Global ASH Summary' as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+;
+
+column message clear
+
+set heading on
 
 /* Summary information based on ASH */
 
-column instance_count new_value ic
+column inst_count new_value ic noprint
 column duration_secs  new_value ds
 
 column first_sample format a19
@@ -1040,8 +1337,9 @@ column status       format a8
 
 column slave_count new_value slave_count
 
-select
+select  /* XPLAN_ASH GLOBAL_ASH_SUMMARY */
         instance_count
+      , inst_count
       , first_sample
       , last_sample
       , duration_secs
@@ -1051,20 +1349,23 @@ select
       , round(cpu_sample_count / sample_count * 100)                          as percentage_cpu
       , slave_count
       , case when average_as >= &rnd_thr then round(average_as) else average_as end as average_as
+      , module
+      , action
 from
         (
           select
-                  count(distinct &inst_id)                                                                                as instance_count
+                  to_char(count(distinct &inst_id), 'TM')                                                                 as inst_count
+                , count(distinct &inst_id)                                                                                as instance_count
                 , to_char(min(sample_time), '&dm')                                                                        as first_sample
                 , to_char(max(sample_time), '&dm')                                                                        as last_sample
-&_IF_ORA11_OR_HIGHER                  , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq                                as duration_secs
-&_IF_LOWER_THAN_ORA11                 , 0                                                                                                       as duration_secs
+                , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq                                as duration_secs
                 , case when max(sample_time) >= sysdate - 2 * &sample_freq / 86400 then 'ACTIVE' else 'INACTIVE' end      as status
                 , count(*)                                                                                                as sample_count
                 , sum(is_on_cpu)                                                                                          as cpu_sample_count
                 , count(distinct process)                                                                                 as slave_count
-&_IF_ORA11_OR_HIGHER                  , round(count(*) / (((max(sample_time) - min(sql_exec_start)) * 86400) + &sample_freq) * &sample_freq, 2) as average_as
-&_IF_LOWER_THAN_ORA11                 , 0                                                                                                       as average_as
+                , nvl(max(module), '<NULL>')                                                                              as module
+                , nvl(max(action), '<NULL>')                                                                              as action
+                , round(count(*) / (((max(sample_time) - min(sql_exec_start)) * 86400) + &sample_freq) * &sample_freq, 2) as average_as
           from
                   (
                     select
@@ -1073,31 +1374,37 @@ from
                           , sql_id
                           , case
                             -- REGEXP_SUBSTR lacks the subexpr parameter in 10.2
-                            -- when regexp_substr(program, '^.*\((P[[:alnum:]]{3})\)$', 1, 1, 'c', 1) is null
-                            when regexp_instr(regexp_replace(program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c'), '^P[[:alnum:]]{3}$') != 1
+                            -- when regexp_substr(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', 1, 1, 'c', 1) is null
+                            when regexp_instr(regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c'), '^P[[:alnum:]][[:digit:]][[:digit:]]$') != 1
                             then null
                             -- REGEXP_SUBSTR lacks the subexpr parameter in 10.2
-                            -- else &inst_id || '-' || regexp_substr(program, '^.*\((P[[:alnum:]]{3})\)$', 1, 1, 'c', 1)
-                            else &inst_id || '-' || regexp_replace(program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c')
+                            -- else &inst_id || '-' || regexp_substr(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', 1, 1, 'c', 1)
+                            else &inst_id || '-' || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c')
                             end                                                                                       as process
                           , case when session_state = 'ON CPU' then 1 else 0 end                                      as is_on_cpu
+                          , module
+                          , action
 &_IF_ORA11_OR_HIGHER                            , sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , to_date('&ls', '&dm') as sql_exec_start
 &_IF_ORA11_OR_HIGHER                            , sql_exec_id
                     from
-                            &global_ash
+                            &global_ash ash
+                    where
+                            sql_id = '&si'
+                    and     &ash_pred1 &ash_pred2
+                    and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
                   ) ash
           where
-                  ash.sql_id = '&si'
-&_IF_ORA11_OR_HIGHER            and     ash.sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER            and     ash.sql_exec_id = &li
-          and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
-          and     '&_IF_ORA11_OR_HIGHER' is null
+                  (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
           -- This prevents the aggregate functions to produce a single row
           -- in case of no rows generated to aggregate
           group by
                   1
 )
 ;
+
+-- If you need to debug, comment the following line
+set termout off
 
 column slave_count noprint
 
@@ -1117,16 +1424,58 @@ column status       clear
 
 column is_cross_instance   new_value _IF_CROSS_INSTANCE    noprint
 column is_ora112_or_higher new_value _IF_ORA112_OR_HIGHERP noprint
+column is_ora11_or_higher  new_value _IF_ORA11_OR_HIGHERP  noprint
 
 select
         case when to_number(nvl('&ic', '0')) > 1 then '' else 'no' end  as is_cross_instance
       , case when '&_IF_ORA112_OR_HIGHER' is null then '' else 'no' end as is_ora112_or_higher
+      , case when '&_IF_ORA11_OR_HIGHER'  is null then '' else 'no' end as is_ora11_or_higher
 from
         dual
 ;
 
 column is_cross_instance clear
 column is_ora112_or_higher clear
+column is_ora11_or_higher clear
+
+set termout on
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        'Global ASH Summary per Instance' as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+and     to_number(nvl('&ic', '0')) > 1
+;
+
+column message clear
+
+set heading on
 
 /* Summary information per RAC instance based on ASH (for cross-instance SQL execution) */
 
@@ -1134,7 +1483,7 @@ column first_sample      format a19
 column last_sample       format a19
 column time_active_graph format a&tgs
 
-select
+select  /* XPLAN_ASH GLOBAL_ASH_SUMMARY_CROSS_INSTANCE */
         instance_id
       , first_sample
       , last_sample
@@ -1150,8 +1499,7 @@ from
                   &inst_id                                                                                             as instance_id
                 , to_char(min(sample_time), '&dm')                                                                     as first_sample
                 , to_char(max(sample_time), '&dm')                                                                     as last_sample
-&_IF_ORA11_OR_HIGHER                  , round((min(sample_time) - min(sql_exec_start)) * 86400)                                              as start_active
-&_IF_LOWER_THAN_ORA11                 , 0                                                                                                    as start_active
+                , round((min(sample_time) - min(sql_exec_start)) * 86400)                                              as start_active
                 , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq                                as duration_secs
                 , count(*)                                                                                             as sample_count
                 , count(distinct process)                                                                              as process_count
@@ -1160,20 +1508,21 @@ from
                   (
                     select
                             &inst_id
-                          , cast(sample_time as date)                                             as sample_time
-                          , regexp_replace(program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c') as process
+                          , cast(sample_time as date)                                                                as sample_time
+                          , regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
                           , sql_id
 &_IF_ORA11_OR_HIGHER                            , sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , to_date('&ls', '&dm') as sql_exec_start
 &_IF_ORA11_OR_HIGHER                            , sql_exec_id
                     from
-                            &global_ash
+                            &global_ash ash
+                    where
+                            sql_id = '&si'
+                    and     &ash_pred1 &ash_pred2
+                    and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
                   ) ash
           where
-                  ash.sql_id = '&si'
-&_IF_ORA11_OR_HIGHER            and     ash.sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER            and     ash.sql_exec_id = &li
-          and     instr('&op', 'ASH') > 0
-          and     '&_IF_ORA11_OR_HIGHER' is null
+                  (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
           and     to_number(nvl('&ic', '0')) > 1
           group by
                   &inst_id
@@ -1190,6 +1539,832 @@ set heading off
 
 column message format a50
 
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        'Global ASH Summary for concurrent activity' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+;
+
+column message clear
+
+set heading on
+
+/* Summary information for concurrent activity based on ASH */
+
+column instance_id &_IF_CROSS_INSTANCE.print
+column sample_count new_value ca_sc
+
+select  /* XPLAN_ASH GLOBAL_ASH_SUMMARY_CONCURRENT_EXECUTION */
+        instance_id
+      , sample_count
+      , cpu_sample_count
+      , round(cpu_sample_count / sample_count * 100)                                as percentage_cpu
+      , case when average_as >= &rnd_thr then round(average_as) else average_as end as average_as
+      , foreground_count
+      , background_count
+      , slave_count
+&_IF_ORA112_OR_HIGHER       , client_count
+      , process_count
+      , transact_count
+      , sql_id_count
+&_IF_ORA11_OR_HIGHER        , sql_execution_count
+      , module_count
+      , action_count
+from
+        (
+          select
+                  instance_id
+                , count(*)                                             as sample_count
+                , round(count(*) / to_number('&ds') * &sample_freq, 2) as average_as
+                , sum(is_on_cpu)                                       as cpu_sample_count
+                , count(distinct process)                              as slave_count
+                , count(is_foreground)                                 as foreground_count
+                , count(is_background)                                 as background_count
+&_IF_ORA112_OR_HIGHER                 , count(distinct machine)                              as client_count
+                , count(distinct program)                              as process_count
+                , count(distinct xid)                                  as transact_count
+                , count(distinct sql_id)                               as sql_id_count
+&_IF_ORA11_OR_HIGHER                  , count(distinct sql_exec_unique)                      as sql_execution_count
+                , count(distinct module)                               as module_count
+                , count(distinct action)                               as action_count
+          from
+                  (
+                    select
+                            &inst_id as instance_id
+                          , cast(sample_time as date)                                                                 as sample_time
+                          , sql_id
+                          , case
+                            -- REGEXP_SUBSTR lacks the subexpr parameter in 10.2
+                            -- when regexp_substr(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', 1, 1, 'c', 1) is null
+                            when regexp_instr(regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c'), '^P[[:alnum:]][[:digit:]][[:digit:]]$') != 1 or session_type != 'FOREGROUND' or program is null
+                            then null
+                            -- REGEXP_SUBSTR lacks the subexpr parameter in 10.2
+                            -- else &inst_id || '-' || regexp_substr(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', 1, 1, 'c', 1)
+                            else &inst_id || '-' || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c')
+                            end                                                                                       as process
+                          , case when session_state = 'ON CPU' then 1 else 0 end                                      as is_on_cpu
+                          , case when session_type = 'FOREGROUND' then 1 else null end                                as is_foreground
+                          , case when session_type = 'BACKGROUND' then 1 else null end                                as is_background
+&_IF_ORA112_OR_HIGHER                           , machine
+                          , program
+                          , xid
+&_IF_ORA11_OR_HIGHER                            , sql_id || '|' || to_char(sql_exec_start, 'DD.MM.YYYY HH24:MI:SS') || '|' || to_char(sql_exec_id, 'TM') as sql_exec_unique
+                          , module
+                          , action
+&_IF_ORA11_OR_HIGHER                            , sql_exec_start
+&_IF_ORA11_OR_HIGHER                            , sql_exec_id
+                    from
+                            &global_ash ash
+                    where
+                            (lnnvl(sql_id = '&si') or &ash_ln_pred1 &ash_ln_pred2)
+                    and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                    and     &inst_id in
+                            (
+                              select
+                                      distinct
+                                      &inst_id
+                              from
+                                      &global_ash ash
+                              where
+                                      sql_id = '&si'
+                              and     &ash_pred1 &ash_pred2
+                              and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                            )
+                  ) ash
+          where
+                  instr('&op', 'ASH') > 0
+          -- This prevents the aggregate functions to produce a single row
+          -- in case of no rows generated to aggregate
+          group by
+                  instance_id
+        )
+order by
+        instance_id
+;
+
+column instance_id clear
+column sample_count clear
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&ca_sc' is null
+---------
+union all
+---------
+select
+        'No concurrent activity detected' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&ca_sc' is null
+;
+
+column message clear
+
+set heading on
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        'Concurrent Activity Summary (not this execution)' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+;
+
+column message clear
+
+set heading on
+
+-- If you need to debug, comment the following line
+set termout off
+
+/* Determine if wait times should be shown or not (Bad ASH math, so don't show that by default) */
+
+column show_wait_times new_value _SHOW_WAIT_TIMES noprint
+
+select
+        case when '&_EXPERIMENTAL' is null then '' else 'no' end as show_wait_times
+from
+        dual
+;
+
+column show_wait_times clear
+
+set termout on
+column instance_id &_IF_CROSS_INSTANCE.print
+column activity format a50
+column activity_class format a20
+column activity_graph format a&wgs
+column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
+break on instance_id
+
+select  /* XPLAN_ASH CONCURRENT_ACTIVITY_CONCURRENT_EXECUTION */
+        instance_id
+      , activity
+      , activity_class
+      , round(avg(time_waited) / 1000, 1)                                         as avg_tim_wait_ms
+      , round(median(time_waited) / 1000, 1)                                      as med_tim_wait_ms
+      , count(*)                                                                  as sample_count
+      , round(count(*) / total_cnt * 100)                                         as percentage
+      , rpad('&gc', nvl(round(count(*) / nullif(total_cnt, 0) * &wgs), 0), '&gc') as activity_graph
+from
+        (
+                    select
+                            &inst_id as instance_id
+                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state end as activity_class
+                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end      as activity
+                          , case when session_state = 'WAITING' then nullif(time_waited, 0) else null end                           as time_waited
+                          , count(*) over ()                                                                                        as total_cnt
+                    from
+                            &global_ash ash
+                    where
+                            (lnnvl(sql_id = '&si') or &ash_ln_pred1 &ash_ln_pred2)
+                    and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                    and     &inst_id in
+                            (
+                              select
+                                      distinct
+                                      &inst_id
+                              from
+                                      &global_ash ash
+                              where
+                                      sql_id = '&si'
+                              and     &ash_pred1 &ash_pred2
+                              and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                            )
+                    and     instr('&op', 'ASH') > 0
+        )
+group by
+        instance_id
+      , activity
+      , activity_class
+      , total_cnt
+order by
+        instance_id
+      , sample_count desc
+;
+
+column instance_id clear
+column activity clear
+column activity_class clear
+column activity_graph clear
+column avg_tim_wait_ms clear
+column med_tim_wait_ms clear
+
+clear breaks
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&ca_sc' is null
+---------
+union all
+---------
+select
+        'No concurrent activity detected' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&ca_sc' is null
+;
+
+column message clear
+
+set heading on
+
+/* I/O Summary information based on ASH */
+
+/* The following query will be used multiple times with different parameters and therefore written to a temporary file */
+
+select  /* XPLAN_ASH IO_SUMMARY */
+        instance_id
+      , duration_secs
+      , lpad(to_char(round(total_read_io_req / power(10, power_10_total_read_io_req - case when power_10_total_read_io_req > 0 and power_10_total_read_io_req_3 = 0 then 3 else power_10_total_read_io_req_3 end)), 'FM99999'), 5) ||
+        case power_10_total_read_io_req - case when power_10_total_read_io_req > 0 and power_10_total_read_io_req_3 = 0 then 3 else power_10_total_read_io_req_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when total_read_io_req is null
+             then null
+             else '*10^'||to_char(power_10_total_read_io_req - case when power_10_total_read_io_req > 0 and power_10_total_read_io_req_3 = 0 then 3 else power_10_total_read_io_req_3 end)
+             end
+        end      as total_read_io_req
+      , lpad(to_char(round(total_write_io_req / power(10, power_10_total_write_io_req - case when power_10_total_write_io_req > 0 and power_10_total_write_io_req_3 = 0 then 3 else power_10_total_write_io_req_3 end)), 'FM99999'), 5) ||
+        case power_10_total_write_io_req - case when power_10_total_write_io_req > 0 and power_10_total_write_io_req_3 = 0 then 3 else power_10_total_write_io_req_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when total_write_io_req is null
+             then null
+             else '*10^'||to_char(power_10_total_write_io_req - case when power_10_total_write_io_req > 0 and power_10_total_write_io_req_3 = 0 then 3 else power_10_total_write_io_req_3 end)
+             end
+        end      as total_write_io_req
+      , lpad(to_char(round(read_io_req_per_sec / power(10, power_10_read_io_req_per_sec - case when power_10_read_io_req_per_sec > 0 and power_10_read_io_req_per_sec_3 = 0 then 3 else power_10_read_io_req_per_sec_3 end)), 'FM99999'), 5) ||
+        case power_10_read_io_req_per_sec - case when power_10_read_io_req_per_sec > 0 and power_10_read_io_req_per_sec_3 = 0 then 3 else power_10_read_io_req_per_sec_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when read_io_req_per_sec is null
+             then null
+             else '*10^'||to_char(power_10_read_io_req_per_sec - case when power_10_read_io_req_per_sec > 0 and power_10_read_io_req_per_sec_3 = 0 then 3 else power_10_read_io_req_per_sec_3 end)
+             end
+        end      as read_io_req_per_sec
+      , lpad(to_char(round(write_io_req_per_sec / power(10, power_10_write_io_req_per_sec - case when power_10_write_io_req_per_sec > 0 and power_10_write_io_req_persec_3 = 0 then 3 else power_10_write_io_req_persec_3 end)), 'FM99999'), 5) ||
+        case power_10_write_io_req_per_sec - case when power_10_write_io_req_per_sec > 0 and power_10_write_io_req_persec_3 = 0 then 3 else power_10_write_io_req_persec_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when write_io_req_per_sec is null
+             then null
+             else '*10^'||to_char(power_10_write_io_req_per_sec - case when power_10_write_io_req_per_sec > 0 and power_10_write_io_req_persec_3 = 0 then 3 else power_10_write_io_req_persec_3 end)
+             end
+        end      as write_io_req_per_sec
+      , lpad(to_char(round(total_read_io_bytes / power(10, power_10_t_read_io_bytes - case when power_10_t_read_io_bytes > 0 and power_10_t_read_io_bytes_3 = 0 then 3 else power_10_t_read_io_bytes_3 end)), 'FM99999'), 5) ||
+        case power_10_t_read_io_bytes - case when power_10_t_read_io_bytes > 0 and power_10_t_read_io_bytes_3 = 0 then 3 else power_10_t_read_io_bytes_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when total_read_io_bytes is null
+             then null
+             else '*10^'||to_char(power_10_t_read_io_bytes - case when power_10_t_read_io_bytes > 0 and power_10_t_read_io_bytes_3 = 0 then 3 else power_10_t_read_io_bytes_3 end)
+             end
+        end      as total_read_io_bytes
+      , lpad(to_char(round(total_write_io_bytes / power(10, power_10_t_write_io_bytes - case when power_10_t_write_io_bytes > 0 and power_10_t_write_io_bytes_3 = 0 then 3 else power_10_t_write_io_bytes_3 end)), 'FM99999'), 5) ||
+        case power_10_t_write_io_bytes - case when power_10_t_write_io_bytes > 0 and power_10_t_write_io_bytes_3 = 0 then 3 else power_10_t_write_io_bytes_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when total_write_io_bytes is null
+             then null
+             else '*10^'||to_char(power_10_t_write_io_bytes - case when power_10_t_write_io_bytes > 0 and power_10_t_write_io_bytes_3 = 0 then 3 else power_10_t_write_io_bytes_3 end)
+             end
+        end      as total_write_io_bytes
+      , lpad(to_char(round(total_intercon_io_bytes / power(10, power_10_t_intcon_io_bytes - case when power_10_t_intcon_io_bytes > 0 and power_10_t_intcon_io_bytes_3 = 0 then 3 else power_10_t_intcon_io_bytes_3 end)), 'FM99999'), 5) ||
+        case power_10_t_intcon_io_bytes - case when power_10_t_intcon_io_bytes > 0 and power_10_t_intcon_io_bytes_3 = 0 then 3 else power_10_t_intcon_io_bytes_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when total_intercon_io_bytes is null
+             then null
+             else '*10^'||to_char(power_10_t_intcon_io_bytes - case when power_10_t_intcon_io_bytes > 0 and power_10_t_intcon_io_bytes_3 = 0 then 3 else power_10_t_intcon_io_bytes_3 end)
+             end
+        end      as total_intercon_io_bytes
+      , lpad(to_char(round(read_io_bytes_per_sec / power(10, power_10_read_io_bytes_ps - case when power_10_read_io_bytes_ps > 0 and power_10_read_io_bytes_ps_3 = 0 then 3 else power_10_read_io_bytes_ps_3 end)), 'FM99999'), 5) ||
+        case power_10_read_io_bytes_ps - case when power_10_read_io_bytes_ps > 0 and power_10_read_io_bytes_ps_3 = 0 then 3 else power_10_read_io_bytes_ps_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when read_io_bytes_per_sec is null
+             then null
+             else '*10^'||to_char(power_10_read_io_bytes_ps - case when power_10_read_io_bytes_ps > 0 and power_10_read_io_bytes_ps_3 = 0 then 3 else power_10_read_io_bytes_ps_3 end)
+             end
+        end      as read_io_bytes_per_sec
+      , lpad(to_char(round(write_io_bytes_per_sec / power(10, power_10_write_io_bytes_ps - case when power_10_write_io_bytes_ps > 0 and power_10_write_io_bytes_ps_3 = 0 then 3 else power_10_write_io_bytes_ps_3 end)), 'FM99999'), 5) ||
+        case power_10_write_io_bytes_ps - case when power_10_write_io_bytes_ps > 0 and power_10_write_io_bytes_ps_3 = 0 then 3 else power_10_write_io_bytes_ps_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when write_io_bytes_per_sec is null
+             then null
+             else '*10^'||to_char(power_10_write_io_bytes_ps - case when power_10_write_io_bytes_ps > 0 and power_10_write_io_bytes_ps_3 = 0 then 3 else power_10_write_io_bytes_ps_3 end)
+             end
+        end      as write_io_bytes_per_sec
+      , lpad(to_char(round(intercon_io_bytes_per_sec / power(10, power_10_intercon_io_bytes_ps - case when power_10_intercon_io_bytes_ps > 0 and power_10_intercon_io_byte_ps_3 = 0 then 3 else power_10_intercon_io_byte_ps_3 end)), 'FM99999'), 5) ||
+        case power_10_intercon_io_bytes_ps - case when power_10_intercon_io_bytes_ps > 0 and power_10_intercon_io_byte_ps_3 = 0 then 3 else power_10_intercon_io_byte_ps_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when intercon_io_bytes_per_sec is null
+             then null
+             else '*10^'||to_char(power_10_intercon_io_bytes_ps - case when power_10_intercon_io_bytes_ps > 0 and power_10_intercon_io_byte_ps_3 = 0 then 3 else power_10_intercon_io_byte_ps_3 end)
+             end
+        end      as intercon_io_bytes_per_sec
+      , lpad(to_char(round(avg_read_req_size / power(10, power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)), 'FM99999'), 5) ||
+        case power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when avg_read_req_size is null
+             then null
+             else '*10^'||to_char(power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)
+             end
+        end      as avg_read_req_size
+      , lpad(to_char(round(med_read_req_size / power(10, power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)), 'FM99999'), 5) ||
+        case power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when med_read_req_size is null
+             then null
+             else '*10^'||to_char(power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)
+             end
+        end      as med_read_req_size
+      , lpad(to_char(round(avg_write_req_size / power(10, power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)), 'FM99999'), 5) ||
+        case power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when avg_write_req_size is null
+             then null
+             else '*10^'||to_char(power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)
+             end
+        end      as avg_write_req_size
+      , lpad(to_char(round(med_write_req_size / power(10, power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)), 'FM99999'), 5) ||
+        case power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end
+        when 0            then ' '
+        when 1            then ' '
+        when 3*1          then 'K'
+        when 3*2          then 'M'
+        when 3*3          then 'G'
+        when 3*4          then 'T'
+        when 3*5          then 'P'
+        when 3*6          then 'E'
+        else case
+             when med_write_req_size is null
+             then null
+             else '*10^'||to_char(power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)
+             end
+        end      as med_write_req_size
+      , to_char(nvl(cell_offload_efficiency, 0), '999') || '%' as cell_offload_efficiency
+from
+        (
+          select
+                  instance_id
+                , duration_secs
+                , total_read_io_req
+                , total_write_io_req
+                , read_io_req_per_sec
+                , write_io_req_per_sec
+                , total_read_io_bytes
+                , total_write_io_bytes
+                , total_intercon_io_bytes
+                , avg_read_req_size
+                , med_read_req_size
+                , avg_write_req_size
+                , med_write_req_size
+                , 100 - round(total_intercon_io_bytes / nullif((total_read_io_bytes + total_write_io_bytes), 0) * 100) as cell_offload_efficiency
+                , read_io_bytes_per_sec
+                , write_io_bytes_per_sec
+                , intercon_io_bytes_per_sec
+                , trunc(log(10, abs(case total_read_io_bytes when 0 then 1 else total_read_io_bytes end)))                     as power_10_t_read_io_bytes
+                , trunc(mod(log(10, abs(case total_read_io_bytes when 0 then 1 else total_read_io_bytes end)), 3))             as power_10_t_read_io_bytes_3
+                , trunc(log(10, abs(case total_write_io_bytes when 0 then 1 else total_write_io_bytes end)))                   as power_10_t_write_io_bytes
+                , trunc(mod(log(10, abs(case total_write_io_bytes when 0 then 1 else total_write_io_bytes end)), 3))           as power_10_t_write_io_bytes_3
+                , trunc(log(10, abs(case total_read_io_req when 0 then 1 else total_read_io_req end)))                         as power_10_total_read_io_req
+                , trunc(mod(log(10, abs(case total_read_io_req when 0 then 1 else total_read_io_req end)), 3))                 as power_10_total_read_io_req_3
+                , trunc(log(10, abs(case total_write_io_req when 0 then 1 else total_write_io_req end)))                       as power_10_total_write_io_req
+                , trunc(mod(log(10, abs(case total_write_io_req when 0 then 1 else total_write_io_req end)), 3))               as power_10_total_write_io_req_3
+                , trunc(log(10, abs(case read_io_req_per_sec when 0 then 1 else read_io_req_per_sec end)))                     as power_10_read_io_req_per_sec
+                , trunc(mod(log(10, abs(case read_io_req_per_sec when 0 then 1 else read_io_req_per_sec end)), 3))             as power_10_read_io_req_per_sec_3
+                , trunc(log(10, abs(case write_io_req_per_sec when 0 then 1 else write_io_req_per_sec end)))                   as power_10_write_io_req_per_sec
+                , trunc(mod(log(10, abs(case write_io_req_per_sec when 0 then 1 else write_io_req_per_sec end)), 3))           as power_10_write_io_req_persec_3
+                , trunc(log(10, abs(case total_intercon_io_bytes when 0 then 1 else total_intercon_io_bytes end)))             as power_10_t_intcon_io_bytes
+                , trunc(mod(log(10, abs(case total_intercon_io_bytes when 0 then 1 else total_intercon_io_bytes end)), 3))     as power_10_t_intcon_io_bytes_3
+                , trunc(log(10, abs(case read_io_bytes_per_sec when 0 then 1 else read_io_bytes_per_sec end)))                 as power_10_read_io_bytes_ps
+                , trunc(mod(log(10, abs(case read_io_bytes_per_sec when 0 then 1 else read_io_bytes_per_sec end)), 3))         as power_10_read_io_bytes_ps_3
+                , trunc(log(10, abs(case write_io_bytes_per_sec when 0 then 1 else write_io_bytes_per_sec end)))               as power_10_write_io_bytes_ps
+                , trunc(mod(log(10, abs(case write_io_bytes_per_sec when 0 then 1 else write_io_bytes_per_sec end)), 3))       as power_10_write_io_bytes_ps_3
+                , trunc(log(10, abs(case intercon_io_bytes_per_sec when 0 then 1 else intercon_io_bytes_per_sec end)))         as power_10_intercon_io_bytes_ps
+                , trunc(mod(log(10, abs(case intercon_io_bytes_per_sec when 0 then 1 else intercon_io_bytes_per_sec end)), 3)) as power_10_intercon_io_byte_ps_3
+                , trunc(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)))                         as power_10_avg_read_req_size
+                , trunc(mod(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)), 3))                 as power_10_avg_read_req_size_3
+                , trunc(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)))                         as power_10_med_read_req_size
+                , trunc(mod(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)), 3))                 as power_10_med_read_req_size_3
+                , trunc(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)))                       as power_10_avg_write_req_size
+                , trunc(mod(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)), 3))               as power_10_avg_write_req_size_3
+                , trunc(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)))                       as power_10_med_write_req_size
+                , trunc(mod(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)), 3))               as power_10_med_write_req_size_3
+          from
+                  (
+                    select
+                            instance_id
+                          , duration_secs
+                          , sum_delta_read_io_req                                               as total_read_io_req
+                          , sum_delta_write_io_req                                              as total_write_io_req
+                          , sum_delta_read_io_bytes                                             as total_read_io_bytes
+                          , sum_delta_write_io_bytes                                            as total_write_io_bytes
+                          , sum_delta_interc_io_bytes                                           as total_intercon_io_bytes
+                          , round(avg_delta_read_req_size)                                      as avg_read_req_size
+                          , round(med_delta_read_req_size)                                      as med_read_req_size
+                          , round(avg_delta_write_req_size)                                     as avg_write_req_size
+                          , round(med_delta_write_req_size)                                     as med_write_req_size
+                          , round(sum_delta_read_io_req / duration_secs)                        as read_io_req_per_sec
+                          , round(sum_delta_write_io_req / duration_secs)                       as write_io_req_per_sec
+                          , round(sum_delta_read_io_bytes / duration_secs)                      as read_io_bytes_per_sec
+                          , round(sum_delta_write_io_bytes / duration_secs)                     as write_io_bytes_per_sec
+                          , round(sum_delta_interc_io_bytes / duration_secs)                    as intercon_io_bytes_per_sec
+                    from
+                            (
+                              select
+                                     &GROUP_CROSS_INSTANCE                                                     as instance_id
+                                   , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq  as duration_secs
+                                   , sum(delta_read_io_requests)                                               as sum_delta_read_io_req
+                                   , sum(delta_write_io_requests)                                              as sum_delta_write_io_req
+                                   , sum(delta_read_io_bytes)                                                  as sum_delta_read_io_bytes
+                                   , sum(delta_write_io_bytes)                                                 as sum_delta_write_io_bytes
+                                   , sum(delta_interconnect_io_bytes)                                          as sum_delta_interc_io_bytes
+                                   , avg(delta_read_request_size)                                              as avg_delta_read_req_size
+                                   , median(delta_read_request_size)                                           as med_delta_read_req_size
+                                   , avg(delta_write_request_size)                                             as avg_delta_write_req_size
+                                   , median(delta_write_request_size)                                          as med_delta_write_req_size
+                              from
+                                      (
+                                        select
+                                                &inst_id                  as instance_id
+                                              , sql_id
+                                              , cast(sample_time as date) as sample_time
+&_IF_ORA112_OR_HIGHER                                               , delta_time
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_time
+&_IF_ORA112_OR_HIGHER                                               , delta_read_io_requests
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_read_io_requests
+&_IF_ORA112_OR_HIGHER                                               , delta_write_io_requests
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_write_io_requests
+&_IF_ORA112_OR_HIGHER                                               , delta_read_io_bytes
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_read_io_bytes
+&_IF_ORA112_OR_HIGHER                                               , delta_write_io_bytes
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_write_io_bytes
+&_IF_ORA112_OR_HIGHER                                               , delta_read_io_bytes / nullif(delta_read_io_requests, 0) as delta_read_request_size
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_read_request_size
+&_IF_ORA112_OR_HIGHER                                               , delta_write_io_bytes / nullif(delta_write_io_requests, 0) as delta_write_request_size
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_write_request_size
+&_IF_ORA112_OR_HIGHER                                               , delta_interconnect_io_bytes
+&_IF_LOWER_THAN_ORA112                                              , 0 as delta_interconnect_io_bytes
+&_IF_ORA11_OR_HIGHER                                                , sql_exec_start
+&_IF_LOWER_THAN_ORA11                                               , to_date('01.01.1970', 'DD.MM.YYYY') as sql_exec_start
+&_IF_ORA11_OR_HIGHER                                                , sql_exec_id
+                                        from
+                                                &global_ash ash
+                                        where
+                                                sql_id = '&si'
+                                        and     &ash_pred1 &ash_pred2
+                                        and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                                      ) ash
+                              where
+                              -- only include samples that cover a time period within the execution time period of the SQL statement
+&_IF_ORA112_OR_HIGHER                                       ash.sample_time - round(ash.delta_time / 1000000) / 86400 >= ash.sql_exec_start - &sample_freq / 86400
+&_IF_LOWER_THAN_ORA112                                      1 = 1
+                              and     instr('&op', 'ASH') > 0
+                              and     '&_IF_ORA112_OR_HIGHER' is null
+                              and     '&_EXPERIMENTAL' is null
+                              and     to_number(nvl('&ic', '0')) > &INSTANCE_THRESHOLD
+                              -- This prevents the aggregate functions to produce a single row
+                              -- in case of no rows generated to aggregate
+                              group by
+                                      &GROUP_CROSS_INSTANCE
+                            )
+                  )
+        )
+order by
+        instance_id
+.
+
+-- If you need to debug, comment the following line
+set termout off
+
+save .xplan_ash_temp replace
+
+set termout on
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+---------
+union all
+---------
+select
+        'Global I/O Summary based on ASH' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+;
+
+column message clear
+
+set heading on
+
+-- If you need to debug, comment the following line
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+column instance_id noprint
+
+column duration_secs                       heading 'DURATION|SECS'          justify left
+column total_read_io_req         format a6 heading 'TOTAL|READ|IO|REQS'     justify left
+column total_write_io_req        format a6 heading 'TOTAL|WRITE|IO|REQS'    justify left
+column read_io_req_per_sec       format a6 heading 'READ|IO|REQS|PERSEC'    justify left
+column write_io_req_per_sec      format a6 heading 'WRITE|IO|REQS|PERSEC'   justify left
+column total_read_io_bytes       format a6 heading 'TOTAL|READ|IO|BYTES'    justify left
+column total_write_io_bytes      format a6 heading 'TOTAL|WRITE|IO|BYTES'   justify left
+column avg_read_req_size         format a6 heading 'AVG|READ|REQ|SIZE'      justify left
+column med_read_req_size         format a6 heading 'MEDIAN|READ|REQ|SIZE'   justify left
+column avg_write_req_size        format a6 heading 'AVG|WRITE|REQ|SIZE'     justify left
+column med_write_req_size        format a6 heading 'MEDIAN|WRITE|REQ|SIZE'  justify left
+column total_intercon_io_bytes   format a6 heading 'TOTAL|IO|LAYER|BYTES'   justify left
+column cell_offload_efficiency   format a5 heading 'CELL|OFFL|EFF'          justify left
+column read_io_bytes_per_sec     format a6 heading 'READ|IO|BYTES|PERSEC'   justify left
+column write_io_bytes_per_sec    format a6 heading 'WRITE|IO|BYTES|PERSEC'  justify left
+column intercon_io_bytes_per_sec format a6 heading 'IO|LAYER|BYTES|PERSEC'  justify left
+
+define INSTANCE_THRESHOLD = "0"
+define GROUP_CROSS_INSTANCE = "1"
+
+/
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        'Global I/O Summary per Instance based on ASH' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     '&_IF_ORA112_OR_HIGHER' is null
+and     '&_EXPERIMENTAL' is null
+and     to_number(nvl('&ic', '0')) > 1
+;
+
+column message clear
+
+set heading on
+
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+column instance_id print
+
+define INSTANCE_THRESHOLD = "1"
+define GROUP_CROSS_INSTANCE = "instance_id"
+
+/
+
+undefine INSTANCE_THRESHOLD
+undefine GROUP_CROSS_INSTANCE
+
+column duration_secs             clear
+column total_read_io_req         clear
+column total_write_io_req        clear
+column read_io_req_per_sec       clear
+column write_io_req_per_sec      clear
+column total_read_io_bytes       clear
+column total_write_io_bytes      clear
+column avg_read_req_size         clear
+column med_read_req_size         clear
+column avg_write_req_size        clear
+column med_write_req_size        clear
+column total_intercon_io_bytes   clear
+column cell_offload_efficiency   clear
+column read_io_bytes_per_sec     clear
+column write_io_bytes_per_sec    clear
+column intercon_io_bytes_per_sec clear
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'DISTRIB') > 0
+and     '&plan_exists' is not null
+and     '&_IF_ORA11_OR_HIGHER' is null
+---------
+union all
+---------
 select
         'Information on Parallel Degree based on ASH' as message
 from
@@ -1222,7 +2397,8 @@ column time_active_graph format a&tgs
 column instance_id &_IF_CROSS_INSTANCE.print
 
 /* This statement is effectively turned into a NOOP in versions below 11g */
-with set_count
+with /* XPLAN_ASH PARALLEL_DEGREE_INFO */
+set_count
 as
 (
   select
@@ -1238,6 +2414,7 @@ as
             where
                     p.sql_id = '&si'
             and     p.&second_id = &cn
+            and     &third_id
             and     p.object_node like ':Q%'
             and     instr('&op', 'DISTRIB') > 0
             and     '&plan_exists' is not null
@@ -1246,7 +2423,7 @@ as
   group by
           dfo
 )
-select
+select  /* XPLAN_ASH PARALLEL_DEGREE_INFO */
         instance_id
       , dfo
       , start_active
@@ -1255,13 +2432,14 @@ select
       , process_count
       , set_count
       , assumed_degree
+&_IF_ORA11202_OR_HIGHER      , actual_degree / to_number('&ic') as actual_degree
       , case when average_as >= &rnd_thr then round(average_as) else average_as end                                                                     as average_as
       , substr(rpad(' ', round(start_active / to_number('&ds') * &tgs)) || rpad('&gc', round(duration_secs / to_number('&ds') * &tgs), '&gc'), 1, &tgs) as time_active_graph
 from
         (
           select  /*+ cardinality(100) */
                   &inst_id                                                                                                as instance_id
-                , pr.dfo
+                , sc.dfo
 &_IF_ORA11_OR_HIGHER                  , round((min(sample_time) - min(sql_exec_start)) * 86400)                                                 as start_active
 &_IF_LOWER_THAN_ORA11                 , 0                                                                                                       as start_active
                 , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq                                   as duration_secs
@@ -1269,13 +2447,15 @@ from
                 , count(distinct process)                                                                                 as process_count
                 , sc.set_count                                                                                            as set_count
                 , ceil(count(distinct process) / sc.set_count)                                                            as assumed_degree
+&_IF_ORA11202_OR_HIGHER               , max(trunc(px_flags / 2097152))                                                                          as actual_degree
                 , round(count(*) / (((max(sample_time) - min(sample_time)) * 86400) + &sample_freq) * &sample_freq, 2)    as average_as
           from    (
-                    select
+                    select  /*+ cardinality(ash 100) use_hash(ash p) no_merge(p) */
                             ash.&inst_id
-                          , regexp_replace(ash.program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c') as process
-                          , cast(substr(p.object_node, 2, length(p.object_node) - 4) as varchar2(6))  as dfo
-                          , cast(ash.sample_time as date)                                             as sample_time
+                          , regexp_replace(ash.program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
+                          , cast(substr(p.object_node, 2, length(p.object_node) - 4) as varchar2(6))                     as dfo
+                          , cast(ash.sample_time as date)                                                                as sample_time
+&_IF_ORA11202_OR_HIGHER                         , px_flags
 &_IF_ORA11_OR_HIGHER                            , ash.sql_exec_start
 &_IF_LOWER_THAN_ORA11                           , to_date('01.01.1970', 'DD.MM.YYYY') as sql_exec_start
                     from
@@ -1283,11 +2463,12 @@ from
                           , &plan_table p
                     where
                             ash.sql_id = '&si'
-&_IF_ORA11_OR_HIGHER                      and     ash.sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER                      and     ash.sql_exec_id = &li
-                    -- and     regexp_like(ash.program, '^.*\((P[[:alnum:]]{3})\)$')
+                    and     &ash_pred1 &ash_pred2
+                    and     cast(ash.sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                    -- and     regexp_like(ash.program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$')
                     and     p.sql_id = '&si'
                     and     p.&second_id = &cn
+                    and     &third_id
 &_IF_ORA11_OR_HIGHER                      and     p.id = ash.sql_plan_line_id
                     and     p.object_node is not null
                     and     instr('&op', 'DISTRIB') > 0
@@ -1296,10 +2477,10 @@ from
                   ) pr
                 , set_count sc
           where
-                  sc.dfo = pr.dfo
+                  sc.dfo = pr.dfo (+)
           group by
                   &inst_id
-                , pr.dfo
+                , sc.dfo
                 , sc.set_count
         )
 order by
@@ -1311,67 +2492,24 @@ column dfo               clear
 column time_active_graph clear
 column instance_id       clear
 
-set doc off
-doc
-/* This is no longer used */
-/* Provide summary info on Instance only if a plan is not available */
-
-column time_active_graph format a&tgs
-column instance_id &_IF_CROSS_INSTANCE.print
-
-/* This statement is effectively turned into a NOOP in versions below 11g */
-select
-        instance_id
-      , start_active
-      , duration_secs
-      , sample_count
-      , process_count
-      , substr(rpad(' ', round(start_active / to_number('&ds') * &tgs)) || rpad('&gc', round(duration_secs / to_number('&ds') * &tgs), '&gc'), 1, &tgs) as time_active_graph
-from
-        (
-          select
-                  &inst_id                                                              as instance_id
-&_IF_ORA11_OR_HIGHER                  , round((min(sample_time) - min(sql_exec_start)) * 86400)               as start_active
-&_IF_LOWER_THAN_ORA11                 , 0                                                                     as start_active
-                , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq as duration_secs
-                , count(process)                                                        as sample_count
-                , count(distinct process)                                               as process_count
-          from    (
-                    select
-                            ash.&inst_id
-                          , regexp_replace(ash.program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c') as process
-                          , cast(ash.sample_time as date)                                             as sample_time
-&_IF_ORA11_OR_HIGHER                            , ash.sql_exec_start
-&_IF_LOWER_THAN_ORA11                           , to_date('01.01.1970', 'DD.MM.YYYY')                                       as sql_exec_start
-                    from
-                            &global_ash ash
-                    where
-                            ash.sql_id = '&si'
-&_IF_ORA11_OR_HIGHER                      and     ash.sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER                      and     ash.sql_exec_id = &li
-                    -- and     regexp_like(ash.program, '^.*\((P[[:alnum:]]{3})\)$')
-                    and     instr('&op', 'DISTRIB') > 0
-                    and     '&plan_exists' is null
-                    and     '&_IF_ORA11_OR_HIGHER' is null
-                  ) pr
-          group by
-                  &inst_id
-        )
-order by
-        instance_id
-;
-
-column time_active_graph clear
-column instance_id       clear
-#
-
-set heading off
-
 /* If DISTRIB option was used and Parallel Execution was expected
    show a message here that no Parallel Execution activity could be found in ASH */
 
+set heading off
+
 column message format a50
 
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        '&slave_count' is null and instr('&op', 'DISTRIB') > 0
+and     '&plan_exists' is not null
+and     '&_IF_ORA11_OR_HIGHER' is null
+---------
+union all
+---------
 select
         'No Parallel Slave activity found in ASH!' as message
 from
@@ -1381,15 +2519,29 @@ where
 and     '&plan_exists' is not null
 and     '&_IF_ORA11_OR_HIGHER' is null;
 
+column message clear
+
+set heading on
+
 set heading off
 
+column message format a50
+
 select
-        'Average Active Session Overview based on ASH' as message
+        chr(10) || chr(10) as message
 from
         dual
 where
         '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
-and     '&_IF_ORA11_OR_HIGHER' is null
+---------
+union all
+---------
+select
+        'Parallel Slave activity overview based on ASH' as message
+from
+        dual
+where
+        '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
 ---------
 union all
 ---------
@@ -1399,89 +2551,1079 @@ from
         dual
 where
         '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
-and     '&_IF_ORA11_OR_HIGHER' is null
 ;
 
 column message clear
 
 set heading on
 
-/* Average Active Session overview graph for Parallel Execution */
+-- If you need to debug, comment the following line
+set termout off
 
-column average_as_graph format a256
-column instance_id &_IF_CROSS_INSTANCE.print
+/* Determine if I/O figures should be shown or not */
 
-set doc off
-doc
-/* Old Average Active Session Graph code */
-/* This statement is effectively turned into a NOOP in versions below 11g */
+column show_io_cols new_value _SHOW_IO_COLS noprint
+
 select
-        max(duration_secs)                                                                                            as duration_secs
-      , case when avg(cnt_cpu) >= &rnd_thr then round(avg(cnt_cpu)) else round(avg(cnt_cpu), 2) end                   as cpu
-      , case when avg(cnt_other) >= &rnd_thr then round(avg(cnt_other)) else round(avg(cnt_other), 2) end             as other
-      , case when avg(cnt) >= &rnd_thr then round(avg(cnt)) else round(avg(cnt), 2) end                               as average_as
-      , cast(rpad('&gc', round(avg(cnt_cpu)), '&gc') || rpad('&gc2', round(avg(cnt_other)), '&gc2') as varchar2(256)) as average_as_graph
-from    (
-          select
-                  duration_secs
-                , cnt
-                , cnt_cpu
-                , cnt_other
-                , ntile(&avg_as_bkts) over (order by duration_secs) as bkt
-          from    (
+        case when '&_EXPERIMENTAL' is null and '&_IF_ORA112_OR_HIGHER' is null then '' else 'no' end as show_io_cols
+from
+        dual
+;
+
+column show_io_cols clear
+
+set termout on
+
+column instance_id &_IF_CROSS_INSTANCE.print
+break on instance_id
+
+column process format a64
+column cnt heading 'SAMPLE|COUNT'
+column cnt_cpu heading 'SAMPLE|COUNT|CPU'
+column cnt_other heading 'SAMPLE|COUNT|OTHER'
+column percentage_cpu heading 'PERCENT|CPU'
+column pga  format a6 heading 'MAX|PGA'  &_IF_ORA112_OR_HIGHERP.print
+column temp format a6 heading 'MAX|TEMP' &_IF_ORA112_OR_HIGHERP.print
+column rd_req format a6 heading 'READ|REQS'           &_SHOW_IO_COLS.print
+column wr_req format a6 heading 'WRITE|REQS'          &_SHOW_IO_COLS.print
+column rd_byt format a6 heading 'READ|BYTES'          &_SHOW_IO_COLS.print
+column wr_byt format a6 heading 'WRITE|BYTES'         &_SHOW_IO_COLS.print
+column io_byt format a6 heading 'IO|LAYER|BYTES'      &_SHOW_IO_COLS.print
+column rd_r_s format a6 heading 'READ|REQ|PERSEC'     &_SHOW_IO_COLS.print
+column wr_r_s format a6 heading 'WRITE|REQ|PERSEC'    &_SHOW_IO_COLS.print
+column rd_b_s format a6 heading 'READ|BYTES|PERSEC'   &_SHOW_IO_COLS.print
+column wr_b_s format a6 heading 'WRITE|BYTES|PERSEC'  &_SHOW_IO_COLS.print
+column io_b_s format a6 heading 'IO_LAY|BYTES|PERSEC' &_SHOW_IO_COLS.print
+column a_rr_s format a6 heading 'AVG|RE_REQ|SIZE'     &_SHOW_IO_COLS.print
+column m_rr_s format a6 heading 'MEDIAN|RE_REQ|SIZE'  &_SHOW_IO_COLS.print
+column a_wr_s format a6 heading 'AVG|WR_REQ|SIZE'     &_SHOW_IO_COLS.print
+column m_wr_s format a6 heading 'MEDIAN|WR_REQ|SIZE'  &_SHOW_IO_COLS.print
+column plan_lines format a40 heading 'TOP|ACTIVE|PLAN LINES' &_IF_ORA11_OR_HIGHERP.print
+column activities format a70 heading 'TOP|ACTIVITIES'
+column activity_graph format a&wgs
+
+with /* XPLAN_ASH PARALLEL_SLAVE_ACTIVITY */
+/* Base ASH data */
+ash_base as
+(
+  select  /*+ materialize */
+          &inst_id                                                                                                                                                      as instance_id
+&_IF_ORA11_OR_HIGHER          , sql_exec_start
+&_IF_LOWER_THAN_ORA11         , to_date('&ls', '&dm')                                                                                                                                         as sql_exec_start
+&_IF_ORA11_OR_HIGHER          , sql_plan_line_id
+&_IF_LOWER_THAN_ORA11         , 0 as sql_plan_line_id
+        , cast(sample_time as date)                                                                                                                                     as sample_time
+        , session_state
+        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end                                                            as activity
+        , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
+        , count(*) over ()                                                                                                                                              as total_cnt
+&_IF_ORA112_OR_HIGHER         , nullif(pga_allocated, 0) as pga_allocated
+&_IF_LOWER_THAN_ORA112        , to_number(null) as pga_allocated
+&_IF_ORA112_OR_HIGHER         , nullif(temp_space_allocated, 0) as temp_space_allocated
+&_IF_LOWER_THAN_ORA112        , to_number(null) as temp_space_allocated
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_requests else null end                                    as delta_read_io_requests
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_io_requests
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_requests else null end                                   as delta_write_io_requests
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_io_requests
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_bytes else null end                                       as delta_read_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_io_bytes
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_bytes else null end                                      as delta_write_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_io_bytes
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_bytes / nullif(delta_read_io_requests, 0) else null end   as delta_read_request_size
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_request_size
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_bytes / nullif(delta_write_io_requests, 0) else null end as delta_write_request_size
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_request_size
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_interconnect_io_bytes else null end                               as delta_interconnect_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_interconnect_io_bytes
+  from
+          &global_ash ash
+  where
+          sql_id = '&si'
+  and     &ash_pred1 &ash_pred2
+  and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+  and     '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
+),
+/* The most active plan lines */
+/* Count occurrence per sample_time and execution plan line */
+ash_plan_lines as
+(
+  select
+          cnt
+        , instance_id
+        , process
+        , sql_plan_line_id
+  from
+          (
+            select
+                    count(*) as cnt
+                  , instance_id
+                  , process
+                  , sql_plan_line_id
+            from
+                    ash_base
+            group by
+                    process
+                  , instance_id
+                  , sql_plan_line_id
+          )
+),
+/* The Top N execution plan lines */
+ash_plan_lines_rn as
+(
+  select
+          cnt
+        , sql_plan_line_id
+        , instance_id
+        , process
+        , row_number() over (partition by process, instance_id order by cnt desc, sql_plan_line_id) as rn
+  from
+          ash_plan_lines
+),
+/* Aggregate the Top N execution plan lines */
+/* This will be joined later to the remaining data */
+ash_plan_lines_agg as
+(
+  select
+          instance_id
+        , process
+&_IF_ORA112_OR_HIGHER           , listagg(case when rn > &topnl + 1 then null when rn = &topnl + 1 then '...' else case when sql_plan_line_id is null then null else sql_plan_line_id || '(' || cnt || ')' end end, ',') within group (order by rn) as plan_lines
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topnl + 1 then null when rn = &topnl + 1 then ',' || '...' else case when sql_plan_line_id is null then null else ',' || sql_plan_line_id || '(' || cnt || ')' end end) order by rn), '/V/text()'), ',') as plan_lines
+  from
+          ash_plan_lines_rn
+  group by
+          instance_id
+        , process
+),
+/* Count occurrence per sample_time and ASH activity */
+ash_activity as
+(
+  select
+          cnt
+        , activity
+        , instance_id
+        , process
+  from
+          (
+            select
+                    process
+                  , count(*) as cnt
+                  , activity
+                  , instance_id
+            from
+                    ash_base
+            group by
+                    process
+                  , instance_id
+                  , activity
+          )
+),
+/* The Top N activities per bucket */
+ash_activity_rn as
+(
+  select
+          cnt
+        , activity
+        , instance_id
+        , process
+        , row_number() over (partition by process, instance_id order by cnt desc, activity) as rn
+  from
+          ash_activity
+),
+/* Aggregate the Top N activity */
+/* This will be joined later to the remaining data */
+ash_activity_agg as
+(
+  select
+          instance_id
+        , process
+&_IF_ORA112_OR_HIGHER           , listagg(case when rn > &topna + 1 then null when rn = &topna + 1 then '...' else case when activity is null then null else activity || '(' || cnt || ')' end end, ',') within group (order by rn) as activities
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topna + 1 then null when rn = &topna + 1 then ',' || '...' else case when activity is null then null else ',' || activity || '(' || cnt || ')' end end) order by rn), '/V/text()'), ',') as activities
+  from
+          ash_activity_rn
+  group by
+          instance_id
+        , process
+),
+/* Group the ASH data by process */
+ash_process as
+(
+  select
+          instance_id
+        , process
+        , total_cnt
+        , cnt
+        , cnt_cpu
+        , cnt_other
+        , pga_mem
+        , temp_space
+        , read_req
+        , write_req
+        , read_bytes
+        , write_bytes
+        , total_io_bytes
+        , read_req_per_sec
+        , write_req_per_sec
+        , read_bytes_per_sec
+        , write_bytes_per_sec
+        , tot_io_bytes_per_sec
+        , avg_read_req_size
+        , med_read_req_size
+        , avg_write_req_size
+        , med_write_req_size
+  from    (
+            select
+                    process
+                  , count(session_state)                                                          as cnt
+                  , count(case when session_state = 'ON CPU' then 1 end)                          as cnt_cpu
+                  , count(case when session_state != 'ON CPU' then 1 end)                         as cnt_other
+                  , max(pga_allocated)                                                            as pga_mem
+                  , max(temp_space_allocated)                                                     as temp_space
+                  , sum(delta_read_io_requests)                                                   as read_req
+                  , sum(delta_write_io_requests)                                                  as write_req
+                  , sum(delta_read_io_bytes)                                                      as read_bytes
+                  , sum(delta_write_io_bytes)                                                     as write_bytes
+                  , sum(delta_interconnect_io_bytes)                                              as total_io_bytes
+                  , round(sum(delta_read_io_requests) / &sample_freq  / count(session_state))     as read_req_per_sec
+                  , round(sum(delta_write_io_requests) / &sample_freq / count(session_state))     as write_req_per_sec
+                  , round(sum(delta_read_io_bytes) / &sample_freq / count(session_state))         as read_bytes_per_sec
+                  , round(sum(delta_write_io_bytes) / &sample_freq / count(session_state))        as write_bytes_per_sec
+                  , round(sum(delta_interconnect_io_bytes) / &sample_freq / count(session_state)) as tot_io_bytes_per_sec
+                  , round(avg(delta_read_request_size))                                           as avg_read_req_size
+                  , round(median(delta_read_request_size))                                        as med_read_req_size
+                  , round(avg(delta_write_request_size))                                          as avg_write_req_size
+                  , round(median(delta_write_request_size))                                       as med_write_req_size
+                  , instance_id
+                  , total_cnt
+            from
+                    ash_base
+            group by
+                    process
+                  , instance_id
+                  , total_cnt
+          )
+),
+/* We need some log based data for formatting the figures */
+ash_process_prefmt as
+(
+  select
+          instance_id
+        , process
+        , pga_mem
+        , trunc(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)))                                    as power_10_pga_mem
+        , trunc(mod(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)) ,3))                            as power_10_pga_mem_mod_3
+        , temp_space
+        , trunc(log(10, abs(case temp_space when 0 then 1 else temp_space end)))                              as power_10_temp_space
+        , trunc(mod(log(10, abs(case temp_space when 0 then 1 else temp_space end)), 3))                      as power_10_temp_space_mod_3
+        , read_req
+        , trunc(log(10, abs(case read_req when 0 then 1 else read_req end)))                                  as power_10_read_req
+        , trunc(mod(log(10, abs(case read_req when 0 then 1 else read_req end)), 3))                          as power_10_read_req_mod_3
+        , write_req
+        , trunc(log(10, abs(case write_req when 0 then 1 else write_req end)))                                as power_10_write_req
+        , trunc(mod(log(10, abs(case write_req when 0 then 1 else write_req end)), 3))                        as power_10_write_req_mod_3
+        , avg_read_req_size
+        , trunc(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)))                as power_10_avg_read_req_size
+        , trunc(mod(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)), 3))        as power_10_avg_read_req_size_3
+        , med_read_req_size
+        , trunc(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)))                as power_10_med_read_req_size
+        , trunc(mod(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)), 3))        as power_10_med_read_req_size_3
+        , avg_write_req_size
+        , trunc(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)))              as power_10_avg_write_req_size
+        , trunc(mod(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)), 3))      as power_10_avg_write_req_size_3
+        , med_write_req_size
+        , trunc(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)))              as power_10_med_write_req_size
+        , trunc(mod(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)), 3))      as power_10_med_write_req_size_3
+        , read_bytes
+        , trunc(log(10, abs(case read_bytes when 0 then 1 else read_bytes end)))                              as power_10_read_bytes
+        , trunc(mod(log(10, abs(case read_bytes when 0 then 1 else read_bytes end)), 3))                      as power_10_read_bytes_mod_3
+        , write_bytes
+        , trunc(log(10, abs(case write_bytes when 0 then 1 else write_bytes end)))                            as power_10_write_bytes
+        , trunc(mod(log(10, abs(case write_bytes when 0 then 1 else write_bytes end)), 3))                    as power_10_write_bytes_mod_3
+        , total_io_bytes
+        , trunc(log(10, abs(case total_io_bytes when 0 then 1 else total_io_bytes end)))                      as power_10_total_io_bytes
+        , trunc(mod(log(10, abs(case total_io_bytes when 0 then 1 else total_io_bytes end)), 3))              as power_10_total_io_bytes_mod_3
+        , read_req_per_sec
+        , trunc(log(10, abs(case read_req_per_sec when 0 then 1 else read_req_per_sec end)))                  as power_10_read_req_per_sec
+        , trunc(mod(log(10, abs(case read_req_per_sec when 0 then 1 else read_req_per_sec end)), 3))          as power_10_read_req_ps_mod_3
+        , write_req_per_sec
+        , trunc(log(10, abs(case write_req_per_sec when 0 then 1 else write_req_per_sec end)))                as power_10_write_req_per_sec
+        , trunc(mod(log(10, abs(case write_req_per_sec when 0 then 1 else write_req_per_sec end)), 3))        as power_10_write_req_ps_mod_3
+        , read_bytes_per_sec
+        , trunc(log(10, abs(case read_bytes_per_sec when 0 then 1 else read_bytes_per_sec end)))              as power_10_read_bytes_per_sec
+        , trunc(mod(log(10, abs(case read_bytes_per_sec when 0 then 1 else read_bytes_per_sec end)), 3))      as power_10_read_bytes_ps_mod_3
+        , write_bytes_per_sec
+        , trunc(log(10, abs(case write_bytes_per_sec when 0 then 1 else write_bytes_per_sec end)))            as power_10_write_bytes_per_sec
+        , trunc(mod(log(10, abs(case write_bytes_per_sec when 0 then 1 else write_bytes_per_sec end)), 3))    as power_10_write_bytes_ps_mod_3
+        , tot_io_bytes_per_sec
+        , trunc(log(10, abs(case tot_io_bytes_per_sec when 0 then 1 else tot_io_bytes_per_sec end)))          as power_10_tot_io_bytes_per_sec
+        , trunc(mod(log(10, abs(case tot_io_bytes_per_sec when 0 then 1 else tot_io_bytes_per_sec end)), 3))  as power_10_tot_io_bytes_ps_mod_3
+        , cnt
+        , cnt_cpu
+        , cnt_other
+        , total_cnt
+        , round(cnt_cpu / cnt * 100)                                                                          as percentage_cpu
+  from
+          ash_process
+),
+/* Format the figures */
+ash_process_fmt as
+(
+  select
+          instance_id
+        , process
+        , to_char(round(pga_mem / power(10, power_10_pga_mem - case when power_10_pga_mem > 0 and power_10_pga_mem_mod_3 = 0 then 3 else power_10_pga_mem_mod_3 end)), 'FM99999') ||
+          case power_10_pga_mem - case when power_10_pga_mem > 0 and power_10_pga_mem_mod_3 = 0 then 3 else power_10_pga_mem_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when pga_mem is null
+               then null
+               else '*10^'||to_char(power_10_pga_mem - case when power_10_pga_mem > 0 and power_10_pga_mem_mod_3 = 0 then 3 else power_10_pga_mem_mod_3 end)
+               end
+          end      as pga_mem_format
+        , to_char(round(temp_space / power(10, power_10_temp_space - case when power_10_temp_space > 0 and power_10_temp_space_mod_3 = 0 then 3 else power_10_temp_space_mod_3 end)), 'FM99999') ||
+          case power_10_temp_space - case when power_10_temp_space > 0 and power_10_temp_space_mod_3 = 0 then 3 else power_10_temp_space_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when temp_space is null
+               then null
+               else '*10^'||to_char(power_10_temp_space - case when power_10_temp_space > 0 and power_10_temp_space_mod_3 = 0 then 3 else power_10_temp_space_mod_3 end)
+               end
+          end      as temp_space_format
+        , to_char(round(read_req / power(10, power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end)), 'FM99999') ||
+          case power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_req is null
+               then null
+               else '*10^'||to_char(power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end)
+               end
+          end      as read_req
+        , to_char(round(avg_read_req_size / power(10, power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)), 'FM99999') ||
+          case power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when avg_read_req_size is null
+               then null
+               else '*10^'||to_char(power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)
+               end
+          end      as avg_read_req_size
+        , to_char(round(med_read_req_size / power(10, power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)), 'FM99999') ||
+          case power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when med_read_req_size is null
+               then null
+               else '*10^'||to_char(power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)
+               end
+          end      as med_read_req_size
+        , to_char(round(avg_write_req_size / power(10, power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)), 'FM99999') ||
+          case power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when avg_write_req_size is null
+               then null
+               else '*10^'||to_char(power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)
+               end
+          end      as avg_write_req_size
+        , to_char(round(med_write_req_size / power(10, power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)), 'FM99999') ||
+          case power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when med_write_req_size is null
+               then null
+               else '*10^'||to_char(power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)
+               end
+          end      as med_write_req_size
+        , to_char(round(write_req / power(10, power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end)), 'FM99999') ||
+          case power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_req is null
+               then null
+               else '*10^'||to_char(power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end)
+               end
+          end      as write_req
+        , to_char(round(read_bytes / power(10, power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_bytes is null
+               then null
+               else '*10^'||to_char(power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end)
+               end
+          end      as read_bytes
+        , to_char(round(write_bytes / power(10, power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_bytes is null
+               then null
+               else '*10^'||to_char(power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end)
+               end
+          end      as write_bytes
+        , to_char(round(total_io_bytes / power(10, power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when total_io_bytes is null
+               then null
+               else '*10^'||to_char(power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end)
+               end
+          end      as total_io_bytes
+        , to_char(round(read_req_per_sec / power(10, power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end)), 'FM99999') ||
+          case power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_req_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end)
+               end
+          end      as read_req_per_sec
+        , to_char(round(write_req_per_sec / power(10, power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end)), 'FM99999') ||
+          case power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_req_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end)
+               end
+          end      as write_req_per_sec
+        , to_char(round(read_bytes_per_sec / power(10, power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end)
+               end
+          end      as read_bytes_per_sec
+        , to_char(round(write_bytes_per_sec / power(10, power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end)
+               end
+          end      as write_bytes_per_sec
+        , to_char(round(tot_io_bytes_per_sec / power(10, power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when tot_io_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end)
+               end
+          end      as tot_io_bytes_per_sec
+        , cnt
+        , cnt_cpu
+        , cnt_other
+        , percentage_cpu
+        , rpad('&gc', nvl(round(cnt / nullif(total_cnt, 0) * &wgs), 0), '&gc') as activity_graph
+  from
+          ash_process_prefmt
+)
+/* The final set including the Top N plan lines and Top N activities */
+select  /* XPLAN_ASH PARALLEL_SLAVE_ACTIVITY */
+        a.instance_id
+      , a.process
+      , cnt
+      , activity_graph
+      , cnt_cpu
+      , cnt_other
+      , percentage_cpu
+      , lpad(pga_mem_format, 6)      as pga
+      , lpad(temp_space_format, 6)   as temp
+      , lpad(read_req, 6)            as rd_req
+      , lpad(write_req, 6)           as wr_req
+      , lpad(read_req_per_sec, 6)    as rd_r_s
+      , lpad(write_req_per_sec, 6)   as wr_r_s
+      , lpad(read_bytes, 6)          as rd_byt
+      , lpad(write_bytes, 6)         as wr_byt
+      , lpad(total_io_bytes, 6)      as io_byt
+      , lpad(read_bytes_per_sec, 6)  as rd_b_s
+      , lpad(write_bytes_per_sec, 6) as wr_b_s
+      , lpad(tot_io_bytes_per_sec, 6) as io_b_s
+      , lpad(avg_read_req_size, 6)   as a_rr_s
+      , lpad(med_read_req_size, 6)   as m_rr_s
+      , lpad(avg_write_req_size, 6)  as a_wr_s
+      , lpad(med_write_req_size, 6)  as m_wr_s
+      , b.plan_lines
+      , c.activities
+from
+        ash_process_fmt a
+      , ash_plan_lines_agg b
+      , ash_activity_agg c
+where
+        a.instance_id = b.instance_id (+)
+and     a.process = b.process (+)
+and     a.instance_id = c.instance_id (+)
+and     a.process = c.process (+)
+order by
+        instance_id
+      , process
+;
+
+column process clear
+column cnt clear
+column cnt_cpu clear
+column cnt_other clear
+column percentage_cpu clear
+column pga  clear
+column temp clear
+column rd_req clear
+column wr_req clear
+column rd_byt clear
+column wr_byt clear
+column io_byt clear
+column rd_r_s clear
+column wr_r_s clear
+column rd_b_s clear
+column wr_b_s clear
+column io_b_s clear
+column a_rr_s clear
+column m_rr_s clear
+column a_wr_s clear
+column m_wr_s clear
+column plan_lines clear
+column activities clear
+column instance_id    clear
+column activity_graph clear
+
+clear breaks
+
+undefine _SHOW_IO_COLS
+
+set heading on
+
+/* Various activity summaries */
+
+/* The following query will be used multiple times with different parameters and therefore written to a temporary file */
+
+select  /* XPLAN_ASH ACTIVITY_SUMMARY */
+        &GROUP_CROSS_INSTANCE as instance_id
+&INCLUDE_ACTIVITY      , activity
+      , activity_class
+      , round(avg(time_waited) / 1000, 1)                                         as avg_tim_wait_ms
+      , round(median(time_waited) / 1000, 1)                                      as med_tim_wait_ms
+      , count(*)                                                                  as sample_count
+      , round(count(*) / total_cnt * 100)                                         as percentage
+      , rpad('&gc', nvl(round(count(*) / nullif(total_cnt, 0) * &wgs), 0), '&gc') as activity_graph
+from
+        (
                     select
-&_IF_ORA11_OR_HIGHER                              round((cast(sample_time as date) - sql_exec_start) * 86400) + 1 as duration_secs
-&_IF_LOWER_THAN_ORA11                             0                                                               as duration_secs
-                          , count(*)                                                        as cnt
-                          , count(case when session_state = 'ON CPU' then 1 end)            as cnt_cpu
-                          , count(case when session_state != 'ON CPU' then 1 end)           as cnt_other
+                            &inst_id as instance_id
+                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state end as activity_class
+                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end      as activity
+                          , case when session_state = 'WAITING' then nullif(time_waited, 0) else null end                           as time_waited
+                          , count(*) over ()                                                                                        as total_cnt
                     from
-                            &global_ash
+                            &global_ash ash
                     where
                             sql_id = '&si'
-&_IF_ORA11_OR_HIGHER                      and     sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER                      and     sql_exec_id = &li
-                    and     '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
-                    and     '&_IF_ORA11_OR_HIGHER' is null
-                    group by
-&_IF_ORA11_OR_HIGHER                              cast(sample_time as date) - sql_exec_start
-&_IF_LOWER_THAN_ORA11                             cast(sample_time as date) - to_date('01.01.1970', 'DD.MM.YYYY')
-                  )
+                    and     &ash_pred1 &ash_pred2
+                    and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+                    and     instr('&op', 'ASH') > 0
+                    and     to_number(nvl('&ic', '0')) > &INSTANCE_THRESHOLD
         )
 group by
-        bkt
+        &GROUP_CROSS_INSTANCE
+&INCLUDE_ACTIVITY      , activity
+      , activity_class
+      , total_cnt
 order by
-        bkt
+        &GROUP_CROSS_INSTANCE
+      , sample_count desc
+.
+
+-- If you need to debug, comment the following line
+set termout off
+
+save .xplan_ash_temp replace
+
+set termout on
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        'Activity Class Summary' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
 ;
-#
+
+column message clear
+
+set heading on
+
+column activity_class format a20
+column activity_graph format a&wgs
+column instance_id noprint
+column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
+
+-- If you need to debug, comment the following line
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+define INSTANCE_THRESHOLD = "0"
+define GROUP_CROSS_INSTANCE = "1"
+define INCLUDE_ACTIVITY = "--"
+
+/
+
+column activity_class clear
+column activity_graph clear
+column instance_id clear
+column avg_tim_wait_ms clear
+column med_tim_wait_ms clear
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        'Activity Class Summary per Instance' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+;
+
+column message clear
+
+set heading on
+
+column activity_class format a20
+column activity_graph format a&wgs
+column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
+break on instance_id
+
+-- If you need to debug, comment the following line
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+define INSTANCE_THRESHOLD = "1"
+define GROUP_CROSS_INSTANCE = "instance_id"
+define INCLUDE_ACTIVITY = "--"
+
+/
+
+column activity_class clear
+column activity_graph clear
+column avg_tim_wait_ms clear
+column med_tim_wait_ms clear
+
+clear breaks
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        'Activity Summary' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+;
+
+column message clear
+
+set heading on
+
+column activity format a50
+column activity_class format a20
+column activity_graph format a&wgs
+column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column instance_id noprint
+
+-- If you need to debug, comment the following line
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+define INSTANCE_THRESHOLD = "0"
+define GROUP_CROSS_INSTANCE = "1"
+define INCLUDE_ACTIVITY = ""
+
+/
+
+column activity clear
+column activity_class clear
+column activity_graph clear
+column instance_id clear
+column avg_tim_wait_ms clear
+column med_tim_wait_ms clear
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        'Activity Summary per Instance' as message
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        instr('&op', 'ASH') > 0
+and     to_number(nvl('&ic', '0')) > 1
+;
+
+column message clear
+
+set heading on
+
+column activity format a50
+column activity_class format a20
+column activity_graph format a&wgs
+column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
+column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
+break on instance_id
+
+-- If you need to debug, comment the following line
+set termout off
+
+get .xplan_ash_temp
+
+set termout on
+
+define INSTANCE_THRESHOLD = "1"
+define GROUP_CROSS_INSTANCE = "instance_id"
+define INCLUDE_ACTIVITY = ""
+
+/
+
+column activity clear
+column activity_class clear
+column activity_graph clear
+column avg_tim_wait_ms clear
+column med_tim_wait_ms clear
+
+clear breaks
+
+undefine INSTANCE_THRESHOLD
+undefine GROUP_CROSS_INSTANCE
+undefine INCLUDE_ACTIVITY
+undefine _SHOW_WAIT_TIMES
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        (('&slave_count' is not null and instr('&op', 'DISTRIB') > 0) or instr('&op', 'TIMELINE') > 0)
+---------
+union all
+---------
+select
+        'Activity Timeline based on ASH' as message
+from
+        dual
+where
+        (('&slave_count' is not null and instr('&op', 'DISTRIB') > 0) or instr('&op', 'TIMELINE') > 0)
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        (('&slave_count' is not null and instr('&op', 'DISTRIB') > 0) or instr('&op', 'TIMELINE') > 0)
+;
+
+column message clear
+
+set heading on
+
+/* Activity Timeline */
+
+-- If you need to debug, comment the following line
+set termout off
+
+/* Determine if I/O figures should be shown or not */
+
+column show_io_cols new_value _SHOW_IO_COLS noprint
+
+select
+        case when '&_EXPERIMENTAL' is null and '&_IF_ORA112_OR_HIGHER' is null then '' else 'no' end as show_io_cols
+from
+        dual
+;
+
+column show_io_cols clear
+
+set termout on
+
+column average_as_graph format a250 heading 'AVERAGE|ACTIVE SESSIONS|GRAPH'
+column instance_id &_IF_CROSS_INSTANCE.print
 
 column pga  format a6 &_IF_ORA112_OR_HIGHERP.print
 column temp format a6 &_IF_ORA112_OR_HIGHERP.print
+column rd_req format a6 heading 'READ|REQS'           &_SHOW_IO_COLS.print
+column wr_req format a6 heading 'WRITE|REQS'          &_SHOW_IO_COLS.print
+column rd_byt format a6 heading 'READ|BYTES'          &_SHOW_IO_COLS.print
+column wr_byt format a6 heading 'WRITE|BYTES'         &_SHOW_IO_COLS.print
+column io_byt format a6 heading 'IO|LAYER|BYTES'      &_SHOW_IO_COLS.print
+column rd_r_s format a6 heading 'READ|REQ|PERSEC'     &_SHOW_IO_COLS.print
+column wr_r_s format a6 heading 'WRITE|REQ|PERSEC'    &_SHOW_IO_COLS.print
+column rd_b_s format a6 heading 'READ|BYTES|PERSEC'   &_SHOW_IO_COLS.print
+column wr_b_s format a6 heading 'WRITE|BYTES|PERSEC'  &_SHOW_IO_COLS.print
+column io_b_s format a6 heading 'IO_LAY|BYTES|PERSEC' &_SHOW_IO_COLS.print
+column a_rr_s format a6 heading 'AVG|RE_REQ|SIZE'     &_SHOW_IO_COLS.print
+column m_rr_s format a6 heading 'MEDIAN|RE_REQ|SIZE'  &_SHOW_IO_COLS.print
+column a_wr_s format a6 heading 'AVG|WR_REQ|SIZE'     &_SHOW_IO_COLS.print
+column m_wr_s format a6 heading 'MEDIAN|WR_REQ|SIZE'  &_SHOW_IO_COLS.print
+column plan_lines format a40 heading 'TOP|ACTIVE|PLAN LINES' &_IF_ORA11_OR_HIGHERP.print
+column activities format a70 heading 'TOP|ACTIVITIES'
+column processes  format a60 heading 'TOP|PROCESSES'
+column average_as heading 'AVERAGE|ACTIVE|SESSIONS'
 break on duration_secs
 
-with
+with /* XPLAN_ASH ACTIVITY_TIMELINE */
 /* Base ASH data */
 ash_base as
 (
   select  /*+ materialize */
           &inst_id                  as instance_id
 &_IF_ORA11_OR_HIGHER          , sql_exec_start
-&_IF_LOWER_THAN_ORA11         , to_date('01.01.1970', 'DD.MM.YYYY') as sql_exec_start
+&_IF_LOWER_THAN_ORA11         , to_date('&ls', '&dm') as sql_exec_start
+&_IF_ORA11_OR_HIGHER          , sql_plan_line_id
+&_IF_LOWER_THAN_ORA11         , 0 as sql_plan_line_id
         , cast(sample_time as date) as sample_time
         , session_state
+        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end as activity
+        , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
 &_IF_ORA112_OR_HIGHER         , nullif(pga_allocated, 0) as pga_allocated
 &_IF_LOWER_THAN_ORA112        , to_number(null) as pga_allocated
 &_IF_ORA112_OR_HIGHER         , nullif(temp_space_allocated, 0) as temp_space_allocated
 &_IF_LOWER_THAN_ORA112        , to_number(null) as temp_space_allocated
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_requests else null end                                    as delta_read_io_requests
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_io_requests
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_requests else null end                                   as delta_write_io_requests
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_io_requests
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_bytes else null end                                       as delta_read_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_io_bytes
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_bytes else null end                                      as delta_write_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_io_bytes
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_read_io_bytes / nullif(delta_read_io_requests, 0) else null end   as delta_read_request_size
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_read_request_size
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_write_io_bytes / nullif(delta_write_io_requests, 0) else null end as delta_write_request_size
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_request_size
+&_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= sql_exec_start - &sample_freq / 86400 then delta_interconnect_io_bytes else null end                               as delta_interconnect_io_bytes
+&_IF_LOWER_THAN_ORA112        , to_number(null) as delta_interconnect_io_bytes
   from
-          &global_ash
+          &global_ash ash
   where
           sql_id = '&si'
-&_IF_ORA11_OR_HIGHER    and     sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER    and     sql_exec_id = &li
-  and     '&slave_count' is not null
-  and     instr('&op', 'DISTRIB') > 0
-  and     '&_IF_ORA11_OR_HIGHER' is null
+  and     &ash_pred1 &ash_pred2
+  and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
+  and     (('&slave_count' is not null and instr('&op', 'DISTRIB') > 0) or instr('&op', 'TIMELINE') > 0)
 ),
 /* Three different points in time: The actual start, the first and last ASH sample */
 dates as
@@ -1518,9 +3660,9 @@ timeline as
   from
           dates
   start with
-          min_sample_time + (rownum - 1) * &sample_freq / 86400 < max_sample_time + &sample_freq / 86400
+          min_sample_time + (rownum - 1) * &sample_freq / 86400 < max_sample_time + 1 / 86400
   connect by
-          min_sample_time + (rownum - 1) * &sample_freq / 86400 < max_sample_time + &sample_freq / 86400
+          min_sample_time + (rownum - 1) * &sample_freq / 86400 < max_sample_time + 1 / 86400
   -- order by
   --        timeline
 ),
@@ -1554,9 +3696,20 @@ ash_data as
           t.sample_time
         , t.instance_id
         , ash.session_state
+        , ash.activity
+        , ash.process
+        , round((t.sample_time - t.sql_exec_start) * 86400) + 1 as duration_secs
         , t.sql_exec_start
+        , ash.sql_plan_line_id
         , ash.pga_allocated
         , ash.temp_space_allocated
+        , ash.delta_read_io_requests
+        , ash.delta_write_io_requests
+        , ash.delta_read_io_bytes
+        , ash.delta_write_io_bytes
+        , ash.delta_read_request_size
+        , ash.delta_write_request_size
+        , ash.delta_interconnect_io_bytes
   from
           timeline_inst t
         , ash_base ash
@@ -1577,9 +3730,20 @@ ash_data as
           t.sample_time
         , t.instance_id
         , ash.session_state
+        , ash.activity
+        , ash.process
+        , round((t.sample_time  - t.sql_exec_start) * 86400) + &sample_freq as duration_secs
         , t.sql_exec_start
+        , ash.sql_plan_line_id
         , ash.pga_allocated
         , ash.temp_space_allocated
+        , ash.delta_read_io_requests
+        , ash.delta_write_io_requests
+        , ash.delta_read_io_bytes
+        , ash.delta_write_io_bytes
+        , ash.delta_read_request_size
+        , ash.delta_write_request_size
+        , ash.delta_interconnect_io_bytes
   from
           timeline_inst t
         , ash_base ash
@@ -1590,6 +3754,237 @@ ash_data as
 --  order by
 --          sample_time
 --        , instance_id
+),
+/* The most active plan lines */
+/* Define the target buckets */
+ash_bkts as
+(
+  select
+          instance_id
+        , duration_secs
+        , ntile(&avg_as_bkts) over (partition by instance_id order by duration_secs) as bkt
+  from
+          (
+            select
+                    distinct
+                    instance_id
+                  , duration_secs
+            from
+                    ash_data
+          )
+),
+/* Count occurrence per sample_time and execution plan line */
+ash_plan_lines as
+(
+  select
+          cnt
+        , sql_plan_line_id
+        , instance_id
+        , duration_secs
+  from
+          (
+            select
+                    duration_secs
+                  , count(*) as cnt
+                  , case when session_state is null then null else nvl(to_char(sql_plan_line_id, 'TM'), '<NULL>') end as sql_plan_line_id
+                  , instance_id
+            from
+                    ash_data
+            group by
+                    duration_secs
+                  , instance_id
+                  , case when session_state is null then null else nvl(to_char(sql_plan_line_id, 'TM'), '<NULL>') end
+          )
+),
+/* Group by bucket and execution plan line */
+ash_plan_lines_bkts as
+(
+  select
+          sum(a.cnt) as cnt
+        , max(a.duration_secs) as duration_secs
+        , a.sql_plan_line_id
+        , a.instance_id
+        , b.bkt
+  from
+          ash_plan_lines a
+        , ash_bkts b
+  where
+          a.instance_id = b.instance_id
+  and     a.duration_secs = b.duration_secs
+  group by
+          a.sql_plan_line_id
+        , a.instance_id
+        , b.bkt
+),
+/* The Top N execution plan lines per bucket */
+ash_plan_lines_bkts_rn as
+(
+  select
+          cnt
+        , sql_plan_line_id
+        , instance_id
+        , bkt
+        , duration_secs
+        , row_number() over (partition by bkt, instance_id order by cnt desc, sql_plan_line_id) as rn
+  from
+          ash_plan_lines_bkts
+),
+/* Aggregate per bucket the Top N execution plan lines */
+/* This will be joined later to the remaining bucket data */
+ash_plan_lines_bkts_agg as
+(
+  select
+          instance_id
+        , max(duration_secs) as duration_secs
+&_IF_ORA112_OR_HIGHER           , listagg(case when rn > &topnl + 1 then null when rn = &topnl + 1 then '...' else case when sql_plan_line_id is null then null else sql_plan_line_id || '(' || cnt || ')' end end, ',') within group (order by rn) as plan_lines
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topnl + 1 then null when rn = &topnl + 1 then ',' || '...' else case when sql_plan_line_id is null then null else ',' || sql_plan_line_id || '(' || cnt || ')' end end) order by rn), '/V/text()'), ',') as plan_lines
+  from
+          ash_plan_lines_bkts_rn
+  group by
+          instance_id
+        , bkt
+),
+/* Count occurrence per sample_time and ASH activity */
+ash_activity as
+(
+  select
+          cnt
+        , activity
+        , instance_id
+        , duration_secs
+  from
+          (
+            select
+                    duration_secs
+                  , count(*) as cnt
+                  , case when session_state is null then null else activity end as activity
+                  , instance_id
+            from
+                    ash_data
+            group by
+                    duration_secs
+                  , instance_id
+                  , case when session_state is null then null else activity end
+          )
+),
+/* Group by bucket and activity */
+ash_activity_bkts as
+(
+  select
+          sum(a.cnt) as cnt
+        , max(a.duration_secs) as duration_secs
+        , a.activity
+        , a.instance_id
+        , b.bkt
+  from
+          ash_activity a
+        , ash_bkts b
+  where
+          a.instance_id = b.instance_id
+  and     a.duration_secs = b.duration_secs
+  group by
+          a.activity
+        , a.instance_id
+        , b.bkt
+),
+/* The Top N activities per bucket */
+ash_activity_bkts_rn as
+(
+  select
+          cnt
+        , activity
+        , instance_id
+        , bkt
+        , duration_secs
+        , row_number() over (partition by bkt, instance_id order by cnt desc, activity) as rn
+  from
+          ash_activity_bkts
+),
+/* Aggregate per bucket the Top N activity */
+/* This will be joined later to the remaining bucket data */
+ash_activity_bkts_agg as
+(
+  select
+          instance_id
+        , max(duration_secs) as duration_secs
+&_IF_ORA112_OR_HIGHER           , listagg(case when rn > &topna + 1 then null when rn = &topna + 1 then '...' else case when activity is null then null else activity || '(' || cnt || ')' end end, ',') within group (order by rn) as activities
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topna + 1 then null when rn = &topna + 1 then ',' || '...' else case when activity is null then null else ',' || activity || '(' || cnt || ')' end end) order by rn), '/V/text()'), ',') as activities
+  from
+          ash_activity_bkts_rn
+  group by
+          instance_id
+        , bkt
+),
+/* Count occurrence per sample_time and ASH process */
+ash_process as
+(
+  select
+          cnt
+        , process
+        , instance_id
+        , duration_secs
+  from
+          (
+            select
+                    duration_secs
+                  , count(*) as cnt
+                  , case when session_state is null then null else process end as process
+                  , instance_id
+            from
+                    ash_data
+            group by
+                    duration_secs
+                  , instance_id
+                  , case when session_state is null then null else process end
+          )
+),
+/* Group by bucket and process */
+ash_process_bkts as
+(
+  select
+          sum(a.cnt) as cnt
+        , max(a.duration_secs) as duration_secs
+        , a.process
+        , a.instance_id
+        , b.bkt
+  from
+          ash_process a
+        , ash_bkts b
+  where
+          a.instance_id = b.instance_id
+  and     a.duration_secs = b.duration_secs
+  group by
+          a.process
+        , a.instance_id
+        , b.bkt
+),
+/* The Top N processes per bucket */
+ash_process_bkts_rn as
+(
+  select
+          cnt
+        , process
+        , instance_id
+        , bkt
+        , duration_secs
+        , row_number() over (partition by bkt, instance_id order by cnt desc, process) as rn
+  from
+          ash_process_bkts
+),
+/* Aggregate per bucket the Top N processes */
+/* This will be joined later to the remaining bucket data */
+ash_process_bkts_agg as
+(
+  select
+          instance_id
+        , max(duration_secs) as duration_secs
+&_IF_ORA112_OR_HIGHER           , listagg(case when rn > &topnp + 1 then null when rn = &topnp + 1 then '...' else case when process is null then null else process || '(' || cnt || ')' end end, ',') within group (order by rn) as processes
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topnp + 1 then null when rn = &topnp + 1 then ',' || '...' else case when process is null then null else ',' || process || '(' || cnt || ')' end end) order by rn), '/V/text()'), ',') as processes
+  from
+          ash_process_bkts_rn
+  group by
+          instance_id
+        , bkt
 ),
 /* Group the ASH data by sample_time */
 ash_distrib as
@@ -1602,20 +3997,52 @@ ash_distrib as
         , cnt_other
         , pga_mem
         , temp_space_alloc
+        , read_req
+        , write_req
+        , read_bytes
+        , write_bytes
+        , total_io_bytes
+        , read_req_per_sec
+        , write_req_per_sec
+        , read_bytes_per_sec
+        , write_bytes_per_sec
+        , tot_io_bytes_per_sec
+/*
+        , avg_read_request_size
+        , med_read_request_size
+        , avg_write_request_size
+        , med_write_request_size
+*/
         , ntile(&avg_as_bkts) over (partition by instance_id order by duration_secs) as bkt
   from    (
             select
-                    round((sample_time  - sql_exec_start) * 86400) + 1    as duration_secs
-                  , count(session_state)                                  as cnt
-                  , count(case when session_state = 'ON CPU' then 1 end)  as cnt_cpu
-                  , count(case when session_state != 'ON CPU' then 1 end) as cnt_other
-                  , sum(pga_allocated)                                    as pga_mem
-                  , sum(temp_space_allocated)                             as temp_space_alloc
+                    duration_secs
+                  , count(session_state)                                          as cnt
+                  , count(case when session_state = 'ON CPU' then 1 end)          as cnt_cpu
+                  , count(case when session_state != 'ON CPU' then 1 end)         as cnt_other
+                  , sum(pga_allocated)                                            as pga_mem
+                  , sum(temp_space_allocated)                                     as temp_space_alloc
+                  , sum(delta_read_io_requests)                                   as read_req
+                  , sum(delta_write_io_requests)                                  as write_req
+                  , sum(delta_read_io_bytes)                                      as read_bytes
+                  , sum(delta_write_io_bytes)                                     as write_bytes
+                  , sum(delta_interconnect_io_bytes)                              as total_io_bytes
+                  , sum(delta_read_io_requests) / &sample_freq                    as read_req_per_sec
+                  , sum(delta_write_io_requests) / &sample_freq                   as write_req_per_sec
+                  , sum(delta_read_io_bytes) / &sample_freq                       as read_bytes_per_sec
+                  , sum(delta_write_io_bytes) / &sample_freq                      as write_bytes_per_sec
+                  , sum(delta_interconnect_io_bytes) / &sample_freq               as tot_io_bytes_per_sec
+/*
+                  , avg(delta_read_request_size)                                  as avg_read_req_size
+                  , median(delta_read_request_size)                               as med_read_req_size
+                  , avg(delta_write_request_size)                                 as avg_write_req_size
+                  , median(delta_write_request_size)                              as med_write_req_size
+*/
                   , instance_id
             from
                     ash_data
             group by
-                    sample_time - sql_exec_start
+                    duration_secs
                   , instance_id
           )
 ),
@@ -1628,6 +4055,22 @@ ash_distrib_bkts as
         , max(duration_secs)                                                                                            as duration_secs
         , round(avg(pga_mem))                                                                                           as pga_mem
         , round(avg(temp_space_alloc))                                                                                  as temp_space
+        , round(sum(read_req))                                                                                          as read_req
+        , round(sum(write_req))                                                                                         as write_req
+        , round(sum(read_bytes))                                                                                        as read_bytes
+        , round(sum(write_bytes))                                                                                       as write_bytes
+        , round(sum(total_io_bytes))                                                                                    as total_io_bytes
+        , round(avg(read_req_per_sec))                                                                                  as read_req_per_sec
+        , round(avg(write_req_per_sec))                                                                                 as write_req_per_sec
+        , round(avg(read_bytes_per_sec))                                                                                as read_bytes_per_sec
+        , round(avg(write_bytes_per_sec))                                                                               as write_bytes_per_sec
+        , round(avg(tot_io_bytes_per_sec))                                                                              as tot_io_bytes_per_sec
+/*
+        , round(avg(avg_read_req_size))                                                                                 as avg_read_req_size
+        , round(median(avg_read_req_size))                                                                              as med_read_req_size
+        , round(avg(avg_write_req_size))                                                                                as avg_write_req_size
+        , round(median(avg_write_req_size))                                                                             as med_write_req_size
+*/
         , round(avg(cnt_cpu), 2)                                                                                        as cpu
         , round(avg(cnt_other), 2)                                                                                      as other
         , round(avg(cnt), 2)                                                                                            as average_as
@@ -1641,26 +4084,93 @@ ash_distrib_bkts as
   --         bkt
   --       , instance_id
 ),
-/* We need some log based data for formatting the PGA / TEMP figures */
+/* Some data can be directly averaged on the buckets for higher precision results */
+ash_distrib_per_bkt as
+(
+  select
+          a.instance_id
+        , b.bkt
+        , max(a.duration_secs)                                          as duration_secs
+        , round(avg(delta_read_request_size))                           as avg_read_req_size
+        , round(median(delta_read_request_size))                        as med_read_req_size
+        , round(avg(delta_write_request_size))                          as avg_write_req_size
+        , round(median(delta_write_request_size))                       as med_write_req_size
+  from
+          ash_data a
+        , ash_bkts b
+  where
+          a.instance_id = b.instance_id
+  and     a.duration_secs = b.duration_secs
+  group by
+          a.instance_id
+        , b.bkt
+),
+/* We need some log based data for formatting the figures */
 ash_distrib_bkts_prefmt as
 (
   select
-          instance_id
-        , duration_secs
+          a.instance_id
+        , a.duration_secs
         , pga_mem
-        , trunc(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)))               as power_10_pga_mem
-        , trunc(mod(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)) ,3))       as power_10_pga_mem_mod_3
+        , trunc(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)))                                    as power_10_pga_mem
+        , trunc(mod(log(10, abs(case pga_mem when 0 then 1 else pga_mem end)) ,3))                            as power_10_pga_mem_mod_3
         , temp_space
-        , trunc(log(10, abs(case temp_space when 0 then 1 else temp_space end)))         as power_10_temp_space
-        , trunc(mod(log(10, abs(case temp_space when 0 then 1 else temp_space end)), 3)) as power_10_temp_space_mod_3
-        , case when cpu >= &rnd_thr then round(cpu) else cpu end                         as cpu
-        , case when other >= &rnd_thr then round(other) else other end                   as other
-        , case when average_as >= &rnd_thr then round(average_as) else average_as end    as average_as
+        , trunc(log(10, abs(case temp_space when 0 then 1 else temp_space end)))                              as power_10_temp_space
+        , trunc(mod(log(10, abs(case temp_space when 0 then 1 else temp_space end)), 3))                      as power_10_temp_space_mod_3
+        , read_req
+        , trunc(log(10, abs(case read_req when 0 then 1 else read_req end)))                                  as power_10_read_req
+        , trunc(mod(log(10, abs(case read_req when 0 then 1 else read_req end)), 3))                          as power_10_read_req_mod_3
+        , write_req
+        , trunc(log(10, abs(case write_req when 0 then 1 else write_req end)))                                as power_10_write_req
+        , trunc(mod(log(10, abs(case write_req when 0 then 1 else write_req end)), 3))                        as power_10_write_req_mod_3
+        , avg_read_req_size
+        , trunc(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)))                as power_10_avg_read_req_size
+        , trunc(mod(log(10, abs(case avg_read_req_size when 0 then 1 else avg_read_req_size end)), 3))        as power_10_avg_read_req_size_3
+        , med_read_req_size
+        , trunc(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)))                as power_10_med_read_req_size
+        , trunc(mod(log(10, abs(case med_read_req_size when 0 then 1 else med_read_req_size end)), 3))        as power_10_med_read_req_size_3
+        , avg_write_req_size
+        , trunc(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)))              as power_10_avg_write_req_size
+        , trunc(mod(log(10, abs(case avg_write_req_size when 0 then 1 else avg_write_req_size end)), 3))      as power_10_avg_write_req_size_3
+        , med_write_req_size
+        , trunc(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)))              as power_10_med_write_req_size
+        , trunc(mod(log(10, abs(case med_write_req_size when 0 then 1 else med_write_req_size end)), 3))      as power_10_med_write_req_size_3
+        , read_bytes
+        , trunc(log(10, abs(case read_bytes when 0 then 1 else read_bytes end)))                              as power_10_read_bytes
+        , trunc(mod(log(10, abs(case read_bytes when 0 then 1 else read_bytes end)), 3))                      as power_10_read_bytes_mod_3
+        , write_bytes
+        , trunc(log(10, abs(case write_bytes when 0 then 1 else write_bytes end)))                            as power_10_write_bytes
+        , trunc(mod(log(10, abs(case write_bytes when 0 then 1 else write_bytes end)), 3))                    as power_10_write_bytes_mod_3
+        , total_io_bytes
+        , trunc(log(10, abs(case total_io_bytes when 0 then 1 else total_io_bytes end)))                      as power_10_total_io_bytes
+        , trunc(mod(log(10, abs(case total_io_bytes when 0 then 1 else total_io_bytes end)), 3))              as power_10_total_io_bytes_mod_3
+        , read_req_per_sec
+        , trunc(log(10, abs(case read_req_per_sec when 0 then 1 else read_req_per_sec end)))                  as power_10_read_req_per_sec
+        , trunc(mod(log(10, abs(case read_req_per_sec when 0 then 1 else read_req_per_sec end)), 3))          as power_10_read_req_ps_mod_3
+        , write_req_per_sec
+        , trunc(log(10, abs(case write_req_per_sec when 0 then 1 else write_req_per_sec end)))                as power_10_write_req_per_sec
+        , trunc(mod(log(10, abs(case write_req_per_sec when 0 then 1 else write_req_per_sec end)), 3))        as power_10_write_req_ps_mod_3
+        , read_bytes_per_sec
+        , trunc(log(10, abs(case read_bytes_per_sec when 0 then 1 else read_bytes_per_sec end)))              as power_10_read_bytes_per_sec
+        , trunc(mod(log(10, abs(case read_bytes_per_sec when 0 then 1 else read_bytes_per_sec end)), 3))      as power_10_read_bytes_ps_mod_3
+        , write_bytes_per_sec
+        , trunc(log(10, abs(case write_bytes_per_sec when 0 then 1 else write_bytes_per_sec end)))            as power_10_write_bytes_per_sec
+        , trunc(mod(log(10, abs(case write_bytes_per_sec when 0 then 1 else write_bytes_per_sec end)), 3))    as power_10_write_bytes_ps_mod_3
+        , tot_io_bytes_per_sec
+        , trunc(log(10, abs(case tot_io_bytes_per_sec when 0 then 1 else tot_io_bytes_per_sec end)))          as power_10_tot_io_bytes_per_sec
+        , trunc(mod(log(10, abs(case tot_io_bytes_per_sec when 0 then 1 else tot_io_bytes_per_sec end)), 3))  as power_10_tot_io_bytes_ps_mod_3
+        , case when cpu >= &rnd_thr then round(cpu) else cpu end                                              as cpu
+        , case when other >= &rnd_thr then round(other) else other end                                        as other
+        , case when average_as >= &rnd_thr then round(average_as) else average_as end                         as average_as
         , average_as_graph
   from
-          ash_distrib_bkts
+          ash_distrib_bkts a
+        , ash_distrib_per_bkt b
+  where
+          a.instance_id = b.instance_id
+  and     a.duration_secs = b.duration_secs
 ),
-/* Format the PGA / TEMP figures */
+/* Format the figures */
 ash_distrib_bkts_fmt as
 (
   select
@@ -1698,6 +4208,230 @@ ash_distrib_bkts_fmt as
                else '*10^'||to_char(power_10_temp_space - case when power_10_temp_space > 0 and power_10_temp_space_mod_3 = 0 then 3 else power_10_temp_space_mod_3 end)
                end
           end      as temp_space_format
+        , to_char(round(read_req / power(10, power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end)), 'FM99999') ||
+          case power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_req is null
+               then null
+               else '*10^'||to_char(power_10_read_req - case when power_10_read_req > 0 and power_10_read_req_mod_3 = 0 then 3 else power_10_read_req_mod_3 end)
+               end
+          end      as read_req
+        , to_char(round(avg_read_req_size / power(10, power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)), 'FM99999') ||
+          case power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when avg_read_req_size is null
+               then null
+               else '*10^'||to_char(power_10_avg_read_req_size - case when power_10_avg_read_req_size > 0 and power_10_avg_read_req_size_3 = 0 then 3 else power_10_avg_read_req_size_3 end)
+               end
+          end      as avg_read_req_size
+        , to_char(round(med_read_req_size / power(10, power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)), 'FM99999') ||
+          case power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when med_read_req_size is null
+               then null
+               else '*10^'||to_char(power_10_med_read_req_size - case when power_10_med_read_req_size > 0 and power_10_med_read_req_size_3 = 0 then 3 else power_10_med_read_req_size_3 end)
+               end
+          end      as med_read_req_size
+        , to_char(round(avg_write_req_size / power(10, power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)), 'FM99999') ||
+          case power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when avg_write_req_size is null
+               then null
+               else '*10^'||to_char(power_10_avg_write_req_size - case when power_10_avg_write_req_size > 0 and power_10_avg_write_req_size_3 = 0 then 3 else power_10_avg_write_req_size_3 end)
+               end
+          end      as avg_write_req_size
+        , to_char(round(med_write_req_size / power(10, power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)), 'FM99999') ||
+          case power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when med_write_req_size is null
+               then null
+               else '*10^'||to_char(power_10_med_write_req_size - case when power_10_med_write_req_size > 0 and power_10_med_write_req_size_3 = 0 then 3 else power_10_med_write_req_size_3 end)
+               end
+          end      as med_write_req_size
+        , to_char(round(write_req / power(10, power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end)), 'FM99999') ||
+          case power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_req is null
+               then null
+               else '*10^'||to_char(power_10_write_req - case when power_10_write_req > 0 and power_10_write_req_mod_3 = 0 then 3 else power_10_write_req_mod_3 end)
+               end
+          end      as write_req
+        , to_char(round(read_bytes / power(10, power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_bytes is null
+               then null
+               else '*10^'||to_char(power_10_read_bytes - case when power_10_read_bytes > 0 and power_10_read_bytes_mod_3 = 0 then 3 else power_10_read_bytes_mod_3 end)
+               end
+          end      as read_bytes
+        , to_char(round(write_bytes / power(10, power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_bytes is null
+               then null
+               else '*10^'||to_char(power_10_write_bytes - case when power_10_write_bytes > 0 and power_10_write_bytes_mod_3 = 0 then 3 else power_10_write_bytes_mod_3 end)
+               end
+          end      as write_bytes
+        , to_char(round(total_io_bytes / power(10, power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end)), 'FM99999') ||
+          case power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when total_io_bytes is null
+               then null
+               else '*10^'||to_char(power_10_total_io_bytes - case when power_10_total_io_bytes > 0 and power_10_total_io_bytes_mod_3 = 0 then 3 else power_10_total_io_bytes_mod_3 end)
+               end
+          end      as total_io_bytes
+        , to_char(round(read_req_per_sec / power(10, power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end)), 'FM99999') ||
+          case power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_req_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_read_req_per_sec - case when power_10_read_req_per_sec > 0 and power_10_read_req_ps_mod_3 = 0 then 3 else power_10_read_req_ps_mod_3 end)
+               end
+          end      as read_req_per_sec
+        , to_char(round(write_req_per_sec / power(10, power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end)), 'FM99999') ||
+          case power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_req_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_write_req_per_sec - case when power_10_write_req_per_sec > 0 and power_10_write_req_ps_mod_3 = 0 then 3 else power_10_write_req_ps_mod_3 end)
+               end
+          end      as write_req_per_sec
+        , to_char(round(read_bytes_per_sec / power(10, power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when read_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_read_bytes_per_sec - case when power_10_read_bytes_per_sec > 0 and power_10_read_bytes_ps_mod_3 = 0 then 3 else power_10_read_bytes_ps_mod_3 end)
+               end
+          end      as read_bytes_per_sec
+        , to_char(round(write_bytes_per_sec / power(10, power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when write_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_write_bytes_per_sec - case when power_10_write_bytes_per_sec > 0 and power_10_write_bytes_ps_mod_3 = 0 then 3 else power_10_write_bytes_ps_mod_3 end)
+               end
+          end      as write_bytes_per_sec
+        , to_char(round(tot_io_bytes_per_sec / power(10, power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end)), 'FM99999') ||
+          case power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end
+          when 0            then ' '
+          when 1            then ' '
+          when 3*1          then 'K'
+          when 3*2          then 'M'
+          when 3*3          then 'G'
+          when 3*4          then 'T'
+          when 3*5          then 'P'
+          when 3*6          then 'E'
+          else case
+               when tot_io_bytes_per_sec is null
+               then null
+               else '*10^'||to_char(power_10_tot_io_bytes_per_sec - case when power_10_tot_io_bytes_per_sec > 0 and power_10_tot_io_bytes_ps_mod_3 = 0 then 3 else power_10_tot_io_bytes_ps_mod_3 end)
+               end
+          end      as tot_io_bytes_per_sec
         , cpu
         , other
         , average_as
@@ -1705,17 +4439,45 @@ ash_distrib_bkts_fmt as
   from
           ash_distrib_bkts_prefmt
 )
-select
-        instance_id
-      , duration_secs
-      , lpad(pga_mem_format, 6)    as pga
-      , lpad(temp_space_format, 6) as temp
+/* The final set including the Top N plan lines and Top N activities */
+select  /* XPLAN_ASH ACTIVITY_TIMELINE */
+        a.instance_id
+      , a.duration_secs
+      , lpad(pga_mem_format, 6)      as pga
+      , lpad(temp_space_format, 6)   as temp
+      , lpad(read_req, 6)            as rd_req
+      , lpad(write_req, 6)           as wr_req
+      , lpad(read_req_per_sec, 6)    as rd_r_s
+      , lpad(write_req_per_sec, 6)   as wr_r_s
+      , lpad(read_bytes, 6)          as rd_byt
+      , lpad(write_bytes, 6)         as wr_byt
+      , lpad(total_io_bytes, 6)      as io_byt
+      , lpad(read_bytes_per_sec, 6)  as rd_b_s
+      , lpad(write_bytes_per_sec, 6) as wr_b_s
+      , lpad(tot_io_bytes_per_sec, 6) as io_b_s
+      , lpad(avg_read_req_size, 6)   as a_rr_s
+      , lpad(med_read_req_size, 6)   as m_rr_s
+      , lpad(avg_write_req_size, 6)  as a_wr_s
+      , lpad(med_write_req_size, 6)  as m_wr_s
       , cpu
       , other
       , average_as
+      , b.plan_lines
+      , c.activities
+      , d.processes
       , average_as_graph
 from
-        ash_distrib_bkts_fmt
+        ash_distrib_bkts_fmt a
+      , ash_plan_lines_bkts_agg b
+      , ash_activity_bkts_agg c
+      , ash_process_bkts_agg d
+where
+        a.instance_id = b.instance_id (+)
+and     a.duration_secs = b.duration_secs (+)
+and     a.instance_id = c.instance_id (+)
+and     a.duration_secs = c.duration_secs (+)
+and     a.instance_id = d.instance_id (+)
+and     a.duration_secs = d.duration_secs (+)
 order by
         duration_secs
       , instance_id
@@ -1723,14 +4485,75 @@ order by
 
 column pga  clear
 column temp clear
-
+column rd_req clear
+column wr_req clear
+column rd_byt clear
+column wr_byt clear
+column io_byt clear
+column rd_r_s clear
+column wr_r_s clear
+column rd_b_s clear
+column wr_b_s clear
+column io_b_s clear
+column a_rr_s clear
+column m_rr_s clear
+column a_wr_s clear
+column m_wr_s clear
+column plan_lines clear
+column activities clear
+column processes clear
+column average_as clear
 column average_as_graph clear
 column instance_id      clear
 
 clear breaks
 
-prompt
-prompt
+undefine _SHOW_IO_COLS
+
+set heading off
+
+column message format a50
+
+select
+        chr(10) || chr(10) as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+---------
+union all
+---------
+select
+        'Activity on execution plan line level' as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+and     '&_IF_ORA11_OR_HIGHER' is null
+---------
+union all
+---------
+select
+        'Execution plan details' as message
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+and     '&_IF_LOWER_THAN_ORA11' is null
+---------
+union all
+---------
+select
+        '-----------------------------------------------'
+from
+        dual
+where
+        (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
+;
+
+column message clear
+
+set heading on
 
 set pagesize 0 feedback on
 
@@ -1741,7 +4564,7 @@ set pagesize 0 feedback on
 /* Activity details on execution plan line level */
 
 /* No read consistency on V$ views, therefore we materialize here the ASH content required */
-with
+with /* XPLAN_ASH ACTIVITY_PLAN_LINE */
 ash_base as
 (
   select  /*+ materialize */
@@ -1756,13 +4579,13 @@ ash_base as
         , sql_plan_hash_value
         , sample_time
 &_IF_ORA11_OR_HIGHER          , sql_exec_start
-&_IF_LOWER_THAN_ORA11         , to_date('01.01.1970', 'DD.MM.YYYY')                                                           as sql_exec_start
+&_IF_LOWER_THAN_ORA11         , to_date('&ls', '&dm')                                                           as sql_exec_start
   from
-          &global_ash
+          &global_ash ash
   where
           sql_id = '&si'
-&_IF_ORA11_OR_HIGHER  and     sql_exec_start = to_date('&ls', '&dm')
-&_IF_ORA11_OR_HIGHER  and     sql_exec_id = &li
+  and     &ash_pred1 &ash_pred2
+  and     cast(sample_time as date) between to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS') and to_date('&ash_max_sample_time', 'YYYY-MM-DD HH24:MI:SS')
   and     '&_IF_ORA11_OR_HIGHER' is null
   and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 ),
@@ -1793,8 +4616,8 @@ parallel_procs as
                                 select
                                         distinct
                                         sql_plan_line_id                                                                                                                           as plan_line
-                                      , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c') as process
-                                      , count(*) over (partition by sql_plan_line_id, &inst_id || '-' || regexp_replace(program, '^.*\((P[[:alnum:]]{3})\)$', '\1', 1, 1, 'c'))    as cnt
+                                      , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
+                                      , count(*) over (partition by sql_plan_line_id, &inst_id || '-' || regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c'))    as cnt
                                       , count(*) over (partition by sql_plan_line_id)                                                                                              as total_cnt_plan_line
                                       , count(*) over ()                                                                                                                           as total_cnt
                                 from
@@ -1868,9 +4691,9 @@ plan_line_timelines as
   from
           (
             select
-                    round((min(sample_time) - min(sql_exec_start)) * 86400)    as start_active
-                  , round(((max(sample_time) - min(sample_time)) * 86400)) + 1 as duration_secs
-                  , sql_plan_line_id                                           as plan_line
+                    round((min(sample_time) - min(sql_exec_start)) * 86400)               as start_active
+                  , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq as duration_secs
+                  , sql_plan_line_id                                                      as plan_line
             from
                     (
                       select
@@ -1906,10 +4729,11 @@ sql_plan_data as
           id
         , parent_id
   from
-          &plan_table_name
+          &plan_table_name p
   where
           sql_id = '&si'
   and     &second_id = &cn
+  and     &third_id
 ),
 hierarchy_data as
 (
@@ -2178,7 +5002,11 @@ xplan_data as (
                     rownum as rn
                   , plan_table_output
             from
-                    table(&plan_function('&si',&cn, &par_fil.'&fo')) dc
+                    /* From 11.2.0.2 on this will execute the given cursor on all RAC instances but effectively only on that instance where the plan should reside */
+                    /* The GV$ table function is undocumented but used for a similar purpose by 11.2.0.2+ Real-Time SQL Monitoring */
+&_IF_ORA11202_OR_HIGHER                   table(gv$(cursor(select * from table(&plan_function('&si',&cn, &par_fil.'&fo')) where USERENV('INSTANCE') = &plan_inst_id))) dc
+                    /* Prior to 11.2.0.2 this problem is not solved yet as GV$() is not supported and DBMS_XPLAN.DISPLAY cannot show Rowsource statistics and would require a different parameter set to call */
+&_IF_LOWER_THAN_ORA11202                  table(&plan_function('&si',&cn, &par_fil.'&fo')) dc
           ) x
         , ordered_hierarchy_data o
         , formatted_data a
@@ -2214,7 +5042,7 @@ xplan_data as (
 )
 /* Inject the additional data into the original DBMS_XPLAN output
    by using the MODEL clause */
-select
+select  /* XPLAN_ASH ACTIVITY_PLAN_LINE */
         plan_table_output
       -- , plan_table_count
 from
@@ -2512,7 +5340,7 @@ plan_operations as
           '&_IF_ORA11_OR_HIGHER' is null
   and     (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
 )
-select
+select  /* XPLAN_ASH ACTIVITY_PLAN_LINE */
         o.plan_hash_value
       , o.plan_line
       , o.plan_operation
@@ -2556,6 +5384,7 @@ column time_active_graph clear
 -- Clean up SQL*Plus environment --
 -----------------------------------
 
+undefine _EXPERIMENTAL
 undefine default_fo
 undefine default_source
 undefine default_operation
@@ -2572,6 +5401,8 @@ undefine child_ad
 undefine slave_count
 undefine topnp
 undefine topnw
+undefine topnl
+undefine topna
 undefine pgs
 undefine wgs
 undefine si
@@ -2602,8 +5433,12 @@ undefine _IF_ORA11_OR_HIGHER
 undefine _IF_LOWER_THAN_ORA11
 undefine _IF_ORA112_OR_HIGHER
 undefine _IF_LOWER_THAN_ORA112
+undefine _IF_ORA11202_OR_HIGHER
+undefine _IF_LOWER_THAN_ORA11202
 undefine _IF_ORA112_OR_HIGHERP
+undefine _IF_ORA11_OR_HIGHERP
 undefine _IF_CROSS_INSTANCE
+undefine _SQL_EXEC2
 undefine plan_table_name
 undefine las
 undefine active_ind
@@ -2620,6 +5455,7 @@ undefine curr_second_id_monitor
 undefine curr_sample_freq
 undefine curr_plan_function
 undefine curr_par_fil
+undefine curr_third_id
 undefine hist_global_ash
 undefine hist_inst_id
 undefine hist_plan_table
@@ -2629,6 +5465,7 @@ undefine hist_second_id_monitor
 undefine hist_sample_freq
 undefine hist_plan_function
 undefine hist_par_fil
+undefine hist_third_id
 undefine mixed_global_ash
 undefine mixed_inst_id
 undefine mixed_plan_table
@@ -2638,6 +5475,7 @@ undefine mixed_second_id_monitor
 undefine mixed_sample_freq
 undefine mixed_plan_function
 undefine mixed_par_fil
+undefine mixed_third_id
 undefine global_ash
 undefine inst_id
 undefine plan_table
@@ -2682,6 +5520,15 @@ undefine _SHOW_ACTIVITY_GRAPH
 undefine _SHOW_START_ACTIVE
 undefine _SHOW_DURATION_SECS
 undefine _SHOW_TIME_ACTIVE_GRAPH
+undefine ash_pred1
+undefine ash_pred2
+undefine ash_ln_pred1
+undefine ash_ln_pred2
+undefine ash_min_sample_time
+undefine ash_max_sample_time
+undefine ca_sc
+undefine plan_inst_id
+undefine third_id
 
 col plan_table_output clear
 col prev_sql_id clear
@@ -2719,6 +5566,8 @@ col ora11_higher  clear
 col ora11_lower   clear
 col ora112_higher clear
 col ora112_lower  clear
+col ora11202_higher clear
+col ora11202_lower  clear
 col global_ash clear
 col inst_id clear
 col plan_table clear
@@ -2729,7 +5578,7 @@ col sample_freq clear
 col plan_function clear
 col par_fil clear
 col plan_table_name clear
-col instance_count clear
+col inst_count clear
 col c_pid clear
 col c_ord clear
 col c_act clear
