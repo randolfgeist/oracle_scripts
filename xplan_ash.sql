@@ -217,8 +217,10 @@ doc
 --               This might be an indicator that something was broken or went wrong and could be worth further investigation.
 --
 -- Change Log:
---               1.0: August 2012
---                    Initial release
+--
+--               2.01: October 2012
+--                    - The NONE option did not populate a substitution variable properly that is required from 11.2.0.2 on
+--                      for running the DBMS_XPLAN function on the right node via the GV$() function
 --
 --               2.0: October 2012
 --                    - Access check
@@ -236,6 +238,9 @@ doc
 --                    - From 11.2.0.2 on: Executions plans are now pulled from the remote RAC instance Library Cache if necessary
 --                    - Separate Parallel Slave activity overview
 --                    - Limited support for Oracle 10.2 ASH
+--
+--               1.0: August 2012
+--                    Initial release
 --
 -- Ideas:        - Include GV$SESSION_LONGOPS information
 --               - Show information about the session identified
@@ -850,7 +855,7 @@ group by
 ;
 
 select
-        nvl('&plan_inst_id', '0') as instance_id
+        nvl('&plan_inst_id', sys_context('USERENV', 'INSTANCE')) as instance_id
 from
         dual;
 
@@ -1181,6 +1186,11 @@ from
                   )
         )
 ;
+
+select
+        nvl('&plan_inst_id', sys_context('USERENV', 'INSTANCE')) as instance_id
+from
+        dual;
 
 column pred1           clear
 column pred2           clear
