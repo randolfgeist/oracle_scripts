@@ -10,7 +10,7 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      2.0
+-- Version:      2.01
 --               October 2012
 --
 -- Author:       Randolf Geist
@@ -191,14 +191,19 @@ doc
 --
 --               http://oracle-randolf.blogspot.com/2012/08/parallel-execution-analysis-using-ash.html
 --
+--               It contains a complete description along with the command line reference, notes and examples
+--
 --               The official blog post for version 2.0 of the tool can be found here:
 --
 --               http://oracle-randolf.blogspot.com/2012/10/new-version-of-xplanash-utility.html
 --
+--               It explains all the new sections and features of 2.0
+--
 --               You can find all related posts following this link:
 --               http://oracle-randolf.blogspot.com/search/label/XPLAN_ASH
 --
---               It contains a complete description along with the command line reference, notes and examples
+--               The latest version can be downloaded here:
+--               https://github.com/randolfgeist/oracle_scripts/raw/master/xplan_ash.sql
 --
 -- Experimental: There is a global switch _EXPERIMENTAL at the beginning of the configuration section below.
 --               By default this is disabled because the stuff shown could be called "unreliable" and potentially "misleading" information.
@@ -678,7 +683,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V2.0 (C) 2012 Randolf Geist
+prompt XPLAN_ASH V2.01 (C) 2012 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Initializing...
