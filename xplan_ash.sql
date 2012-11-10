@@ -10,7 +10,7 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      2.01
+-- Version:      2.02
 --               October 2012
 --
 -- Author:       Randolf Geist
@@ -222,6 +222,11 @@ doc
 --               This might be an indicator that something was broken or went wrong and could be worth further investigation.
 --
 -- Change Log:
+--
+--               2.02: October 2012
+--                    - Running the script on 10g is more sensitive how the session information is populated in the ASH data
+--                      Therefore the query to define the session predicates was modified
+--                    - The INACTIVE / ACTIVE indicator in the "Global ASH summary" was sometimes incorrectly showing "INACTIVE" status although the statement was still running
 --
 --               2.01: October 2012
 --                    - The NONE option did not populate a substitution variable properly that is required from 11.2.0.2 on
@@ -683,7 +688,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V2.01 (C) 2012 Randolf Geist
+prompt XPLAN_ASH V2.02 (C) 2012 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Initializing...
@@ -1105,6 +1110,7 @@ column ln_pred2        new_value ash_ln_pred2
 column instance_id     new_value plan_inst_id
 column min_sample_time new_value ash_min_sample_time
 column max_sample_time new_value ash_max_sample_time
+column current_time    new_value ash_current_time
 
 select  /* XPLAN_ASH DEFINE_ASH_SAMPLES */
         pred1
@@ -1114,6 +1120,7 @@ select  /* XPLAN_ASH DEFINE_ASH_SAMPLES */
       , instance_id
       , to_char(sql_exec_start, 'YYYY-MM-DD HH24:MI:SS')  as min_sample_time
       , to_char(max_sample_time, 'YYYY-MM-DD HH24:MI:SS') as max_sample_time
+      , to_char(sysdate, 'YYYY-MM-DD HH24:MI:SS')         as current_time
 from
         (
           select
@@ -1126,25 +1133,17 @@ from
                 , '((ash.&inst_id = '           || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') ||
                   ' and ash.session_id = '      || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') ||
                   ' and ash.session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') || ')'       as pred1
-                , case when qc_instance_id is not null then
-                  'or (ash.qc_instance_id = ' || to_char(qc_instance_id, 'TM') ||
-                  ' and ash.qc_session_id = ' || to_char(qc_session_id, 'TM') ||
-&_IF_ORA11_OR_HIGHER                    ' and ash.qc_session_serial# = ' || to_char(qc_session_serial#, 'TM') ||
-                  '))'
-                  else
-                  ')'
-                  end                                                                                                                                            as pred2
+                , 'or (ash.qc_instance_id = ' || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') ||
+                  ' and ash.qc_session_id = ' || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') ||
+&_IF_ORA11_OR_HIGHER                    ' and ash.qc_session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') ||
+                  '))'                                                                                                                                                                                       as pred2
                 , '((lnnvl(ash.&inst_id = '          || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') || ')' ||
                   ' or lnnvl(ash.session_id = '      || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') || ')' ||
                   ' or lnnvl(ash.session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') || '))' as ln_pred1
-                , case when qc_instance_id is not null then
-                  'and (lnnvl(ash.qc_instance_id = ' || to_char(qc_instance_id, 'TM') || ')' ||
-                  ' or lnnvl(ash.qc_session_id = ' || to_char(qc_session_id, 'TM') || ')' ||
-&_IF_ORA11_OR_HIGHER                    ' or lnnvl(ash.qc_session_serial# = ' || to_char(qc_session_serial#, 'TM') || ')' ||
-                  '))'
-                  else
-                  ')'
-                  end                                                                                                                                                                                        as ln_pred2
+                , 'and (lnnvl(ash.qc_instance_id = ' || to_char(nvl(case when qc_instance_id is not null then qc_instance_id else instance_id end, 0), 'TM') || ')' ||
+                  ' or lnnvl(ash.qc_session_id = ' || to_char(nvl(case when qc_instance_id is not null then qc_session_id else session_id end, -1), 'TM') || ')' ||
+&_IF_ORA11_OR_HIGHER                    ' or lnnvl(ash.qc_session_serial# = ' || to_char(nvl(case when qc_instance_id is not null then coalesce(qc_session_serial#, session_serial#, -1) else session_serial# end, -1), 'TM') || ')' ||
+                  '))'                                                                                                                                                                                       as ln_pred2
                 , sql_exec_start
           from
                   (
@@ -1175,6 +1174,7 @@ from
                                     , qc_instance_id
                                     , qc_session_id
 &_IF_ORA11_OR_HIGHER                                      , qc_session_serial#
+                                    /* There seem to be sometimes inconsistencies in the ASH data (spurious serial#) therefore with 11g versions the "most occuring" session data will be used */
                                     , count(*) over (partition by
                                                      case when qc_instance_id is not null
                                                      then qc_instance_id || ',' || qc_session_id
@@ -1204,6 +1204,7 @@ column ln_pred2        clear
 column instance_id     clear
 column min_sample_time clear
 column max_sample_time clear
+column current_time    clear
 
 /* Determine any additional filters on the plan tables for remote RAC executions */
 variable out_third_id varchar2(100)
@@ -1374,7 +1375,11 @@ from
                 , to_char(min(sample_time), '&dm')                                                                        as first_sample
                 , to_char(max(sample_time), '&dm')                                                                        as last_sample
                 , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq                                as duration_secs
-                , case when max(sample_time) >= sysdate - 2 * &sample_freq / 86400 then 'ACTIVE' else 'INACTIVE' end      as status
+                , case
+                  when max(sample_time) >= to_date('&ash_current_time', 'YYYY-MM-DD HH24:MI:SS') - 2 * &sample_freq / 86400
+                  then 'ACTIVE'
+                  else 'INACTIVE'
+                  end                                                                                                     as status
                 , count(*)                                                                                                as sample_count
                 , sum(is_on_cpu)                                                                                          as cpu_sample_count
                 , count(distinct process)                                                                                 as slave_count
@@ -5541,6 +5546,7 @@ undefine ash_ln_pred1
 undefine ash_ln_pred2
 undefine ash_min_sample_time
 undefine ash_max_sample_time
+undefine ash_current_time
 undefine ca_sc
 undefine plan_inst_id
 undefine third_id
