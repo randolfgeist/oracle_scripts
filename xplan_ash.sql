@@ -10,8 +10,8 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      2.02
---               October 2012
+-- Version:      2.03
+--               January 2013
 --
 -- Author:       Randolf Geist
 --               oracle-randolf.blogspot.com
@@ -695,7 +695,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V2.02 (C) 2012 Randolf Geist
+prompt XPLAN_ASH V2.03 (C) 2012, 2013 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Initializing...
