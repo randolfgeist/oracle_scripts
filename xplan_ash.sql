@@ -223,6 +223,13 @@ doc
 --
 -- Change Log:
 --
+--               2.03: January 2013
+--                    - The Activity Graph in "Parallel Slave Activity" now differentiates between "CPU" and "Other" activity
+--                      Furthermore it is scaled now relative to the MAXimum count rather than relative to total activity so that differences in sample count show up more clearly
+--                    - The "Top N Activity ASH" Activity Graph on Execution Plan line level is now also relative to the MAX activity, no longer relative to the total activity, for the same reason
+--                    - Some inconsistencies in ASHs SQL_EXEC_START column addressed - It no longer uses simply the MIN SQL_EXEC_START found but the most occurring one among the set identified
+--                      There were some inconsistent entries encountered in 11.2.0.x ASH data
+--
 --               2.02: October 2012
 --                    - Running the script on 10g is more sensitive how the session information is populated in the ASH data
 --                      Therefore the query to define the session predicates was modified
@@ -1374,7 +1381,7 @@ from
                 , count(distinct &inst_id)                                                                                as instance_count
                 , to_char(min(sample_time), '&dm')                                                                        as first_sample
                 , to_char(max(sample_time), '&dm')                                                                        as last_sample
-                , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq                                as duration_secs
+                , round(((max(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400)) + &sample_freq                                as duration_secs
                 , case
                   when max(sample_time) >= to_date('&ash_current_time', 'YYYY-MM-DD HH24:MI:SS') - 2 * &sample_freq / 86400
                   then 'ACTIVE'
@@ -1385,7 +1392,7 @@ from
                 , count(distinct process)                                                                                 as slave_count
                 , nvl(max(module), '<NULL>')                                                                              as module
                 , nvl(max(action), '<NULL>')                                                                              as action
-                , round(count(*) / (((max(sample_time) - min(sql_exec_start)) * 86400) + &sample_freq) * &sample_freq, 2) as average_as
+                , round(count(*) / (((max(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400) + &sample_freq) * &sample_freq, 2) as average_as
           from
                   (
                     select
@@ -1405,7 +1412,9 @@ from
                           , module
                           , action
 &_IF_ORA11_OR_HIGHER                            , sql_exec_start
+&_IF_ORA11_OR_HIGHER                            , count(*) over (partition by sql_exec_start) as cnt_sql_exec_start
 &_IF_LOWER_THAN_ORA11                           , to_date('&ls', '&dm') as sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , 1 as cnt_sql_exec_start
 &_IF_ORA11_OR_HIGHER                            , sql_exec_id
                     from
                             &global_ash ash
@@ -1519,7 +1528,7 @@ from
                   &inst_id                                                                                             as instance_id
                 , to_char(min(sample_time), '&dm')                                                                     as first_sample
                 , to_char(max(sample_time), '&dm')                                                                     as last_sample
-                , round((min(sample_time) - min(sql_exec_start)) * 86400)                                              as start_active
+                , round((min(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400)                                              as start_active
                 , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq                                as duration_secs
                 , count(*)                                                                                             as sample_count
                 , count(distinct process)                                                                              as process_count
@@ -1532,7 +1541,9 @@ from
                           , regexp_replace(program, '^.*\((P[[:alnum:]][[:digit:]][[:digit:]])\)$', '\1', 1, 1, 'c') as process
                           , sql_id
 &_IF_ORA11_OR_HIGHER                            , sql_exec_start
+&_IF_ORA11_OR_HIGHER                            , count(*) over (partition by sql_exec_start) as cnt_sql_exec_start
 &_IF_LOWER_THAN_ORA11                           , to_date('&ls', '&dm') as sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , 1 as cnt_sql_exec_start
 &_IF_ORA11_OR_HIGHER                            , sql_exec_id
                     from
                             &global_ash ash
@@ -2155,7 +2166,7 @@ from
                             (
                               select
                                      &GROUP_CROSS_INSTANCE                                                     as instance_id
-                                   , round(((max(sample_time) - min(sql_exec_start)) * 86400)) + &sample_freq  as duration_secs
+                                   , round(((max(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400)) + &sample_freq  as duration_secs
                                    , sum(delta_read_io_requests)                                               as sum_delta_read_io_req
                                    , sum(delta_write_io_requests)                                              as sum_delta_write_io_req
                                    , sum(delta_read_io_bytes)                                                  as sum_delta_read_io_bytes
@@ -2189,6 +2200,8 @@ from
 &_IF_LOWER_THAN_ORA112                                              , 0 as delta_interconnect_io_bytes
 &_IF_ORA11_OR_HIGHER                                                , sql_exec_start
 &_IF_LOWER_THAN_ORA11                                               , to_date('01.01.1970', 'DD.MM.YYYY') as sql_exec_start
+&_IF_ORA11_OR_HIGHER                                                , count(*) over (partition by sql_exec_start) as cnt_sql_exec_start
+&_IF_LOWER_THAN_ORA11                                               , 1 as cnt_sql_exec_start
 &_IF_ORA11_OR_HIGHER                                                , sql_exec_id
                                         from
                                                 &global_ash ash
@@ -2460,7 +2473,7 @@ from
           select  /*+ cardinality(100) */
                   &inst_id                                                                                                as instance_id
                 , sc.dfo
-&_IF_ORA11_OR_HIGHER                  , round((min(sample_time) - min(sql_exec_start)) * 86400)                                                 as start_active
+&_IF_ORA11_OR_HIGHER                  , round((min(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400)                                                 as start_active
 &_IF_LOWER_THAN_ORA11                 , 0                                                                                                       as start_active
                 , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq                                   as duration_secs
                 , count(process)                                                                                          as sample_count
@@ -2477,7 +2490,9 @@ from
                           , cast(ash.sample_time as date)                                                                as sample_time
 &_IF_ORA11202_OR_HIGHER                         , px_flags
 &_IF_ORA11_OR_HIGHER                            , ash.sql_exec_start
-&_IF_LOWER_THAN_ORA11                           , to_date('01.01.1970', 'DD.MM.YYYY') as sql_exec_start
+&_IF_ORA11_OR_HIGHER                            , count(*) over (partition by ash.sql_exec_start)                        as cnt_sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , to_date('01.01.1970', 'DD.MM.YYYY')                                    as sql_exec_start
+&_IF_LOWER_THAN_ORA11                           , 1                                                                      as cnt_sql_exec_start
                     from
                             &global_ash ash
                           , &plan_table p
@@ -2664,7 +2679,7 @@ ash_base as
   and     '&slave_count' is not null and instr('&op', 'DISTRIB') > 0
 ),
 /* The most active plan lines */
-/* Count occurrence per sample_time and execution plan line */
+/* Count occurrence per process and execution plan line */
 ash_plan_lines as
 (
   select
@@ -2714,7 +2729,7 @@ ash_plan_lines_agg as
           instance_id
         , process
 ),
-/* Count occurrence per sample_time and ASH activity */
+/* Count occurrence per process and ASH activity */
 ash_activity as
 (
   select
@@ -2772,6 +2787,7 @@ ash_process as
         , process
         , total_cnt
         , cnt
+        , max(cnt) over () as max_cnt
         , cnt_cpu
         , cnt_other
         , pga_mem
@@ -2880,6 +2896,7 @@ ash_process_prefmt as
         , cnt_cpu
         , cnt_other
         , total_cnt
+        , max_cnt
         , round(cnt_cpu / cnt * 100)                                                                          as percentage_cpu
   from
           ash_process
@@ -3150,7 +3167,7 @@ ash_process_fmt as
         , cnt_cpu
         , cnt_other
         , percentage_cpu
-        , rpad('&gc', nvl(round(cnt / nullif(total_cnt, 0) * &wgs), 0), '&gc') as activity_graph
+        , rpad('&gc', nvl(round(cnt_cpu / nullif(max_cnt, 0) * &wgs), 0), '&gc') || rpad('&gc2', nvl(round(cnt_other / nullif(max_cnt, 0) * &wgs), 0), '&gc2') as activity_graph
   from
           ash_process_prefmt
 )
@@ -3612,7 +3629,9 @@ ash_base as
   select  /*+ materialize */
           &inst_id                  as instance_id
 &_IF_ORA11_OR_HIGHER          , sql_exec_start
+&_IF_ORA11_OR_HIGHER          , count(*) over (partition by sql_exec_start) as cnt_sql_exec_start
 &_IF_LOWER_THAN_ORA11         , to_date('&ls', '&dm') as sql_exec_start
+&_IF_LOWER_THAN_ORA11         , 1 as cnt_sql_exec_start
 &_IF_ORA11_OR_HIGHER          , sql_plan_line_id
 &_IF_LOWER_THAN_ORA11         , 0 as sql_plan_line_id
         , cast(sample_time as date) as sample_time
@@ -3649,7 +3668,7 @@ ash_base as
 dates as
 (
   select
-          min(sql_exec_start) as sql_exec_start
+          min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first) as sql_exec_start
         , min(sample_time)    as min_sample_time
         , max(sample_time)    as max_sample_time
   from
@@ -4599,7 +4618,9 @@ ash_base as
         , sql_plan_hash_value
         , sample_time
 &_IF_ORA11_OR_HIGHER          , sql_exec_start
+&_IF_ORA11_OR_HIGHER          , count(*) over (partition by sql_exec_start)                                     as cnt_sql_exec_start
 &_IF_LOWER_THAN_ORA11         , to_date('&ls', '&dm')                                                           as sql_exec_start
+&_IF_LOWER_THAN_ORA11         , 1                                                                               as cnt_sql_exec_start
   from
           &global_ash ash
   where
@@ -4659,7 +4680,7 @@ ash as
           plan_line
 &_IF_ORA112_OR_HIGHER          , listagg(case when rn > &topnw + 1 then null when rn = &topnw + 1 then '...' else event || '(' || cnt || ')' end, ',') within group (order by rn) as activity
 &_IF_LOWER_THAN_ORA112         , ltrim(extract(xmlagg(xmlelement("V", case when rn > &topnw + 1 then null when rn = &topnw + 1 then ',' || '...' else ',' || event || '(' || cnt || ')' end) order by rn), '/V/text()'), ',') as activity
-        , rpad(' ', nvl(round(sum_cnt / nullif(total_cnt, 0) * &wgs), 0) + 1, '&gc')                                                                       as activity_graph
+        , rpad(' ', nvl(round(sum_cnt / nullif(max(sum_cnt) over (), 0) * &wgs), 0) + 1, '&gc')                                                                       as activity_graph
   from    (
             select
                     plan_line
@@ -4711,7 +4732,7 @@ plan_line_timelines as
   from
           (
             select
-                    round((min(sample_time) - min(sql_exec_start)) * 86400)               as start_active
+                    round((min(sample_time) - min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first)) * 86400)               as start_active
                   , round(((max(sample_time) - min(sample_time)) * 86400)) + &sample_freq as duration_secs
                   , sql_plan_line_id                                                      as plan_line
             from
@@ -4719,6 +4740,7 @@ plan_line_timelines as
                       select
                               cast(sample_time as date) as sample_time
                             , sql_exec_start
+							, cnt_sql_exec_start
                             , sql_plan_line_id
                       from
                               ash_base
