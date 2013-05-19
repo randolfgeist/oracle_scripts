@@ -10,8 +10,8 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      3.0
---               March 2013
+-- Version:      3.01
+--               May 2013
 --
 -- Author:       Randolf Geist
 --               http://oracle-randolf.blogspot.com
@@ -342,6 +342,9 @@ doc
 --               This might be a good indication that something was broken or went wrong and could be worth further investigation.
 --
 -- Change Log:
+--
+--               3.01: May 2013
+--                    - Some column widths increased and cosmetics changed for some recently renamed headers
 --
 --               3.0: March 2013
 --                    - The "Active" plan lines indicator sometimes was missing for still running statements (same problem as for the "ACTIVE"/"INACTIVE" indicator fixed in 2.02)
@@ -1005,7 +1008,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V3.0 (C) 2012, 2013 Randolf Geist
+prompt XPLAN_ASH V3.01 (C) 2012, 2013 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Legend for graphs:
@@ -3798,7 +3801,7 @@ define GROUP_CROSS_INSTANCE = "1"
 
 set heading off
 
-column message format a50
+column message format a52
 
 select
         chr(10) || chr(10) as message
@@ -3825,7 +3828,7 @@ and     to_number(nvl('&ic', '0')) > 1
 union all
 ---------
 select
-        '-----------------------------------------------'
+        '----------------------------------------------------'
 from
         dual
 where
@@ -4330,7 +4333,7 @@ column m_rr_s format a6 heading 'MEDIAN|RE_REQ|SIZE'  &_SHOW_IO_COLS.print
 column a_wr_s format a6 heading 'AVG|WR_REQ|SIZE'     &_SHOW_IO_COLS.print
 column m_wr_s format a6 heading 'MEDIAN|WR_REQ|SIZE'  &_SHOW_IO_COLS.print
 column plan_lines format a40 heading 'TOP|ACTIVE|PLAN LINES' &_IF_ORA11_OR_HIGHERP.print
-column activities format a70 heading 'TOP|ACTIVITIES'
+column activities format a120 heading 'TOP|ACTIVITIES'
 column activity_graph format a&wgs
 
 with /* XPLAN_ASH PARALLEL_SLAVE_ACTIVITY */
@@ -5316,7 +5319,7 @@ column m_rr_s format a6 heading 'MEDIAN|RE_REQ|SIZE'  &_SHOW_IO_COLS.print
 column a_wr_s format a6 heading 'AVG|WR_REQ|SIZE'     &_SHOW_IO_COLS.print
 column m_wr_s format a6 heading 'MEDIAN|WR_REQ|SIZE'  &_SHOW_IO_COLS.print
 column plan_lines format a40 heading 'TOP|ACTIVE|PLAN LINES' &_IF_ORA11_OR_HIGHERP.print
-column activities format a70 heading 'TOP|ACTIVITIES'
+column activities format a120 heading 'TOP|ACTIVITIES'
 column processes  format a60 heading 'TOP|PROCESSES'
 column average_as heading 'AVERAGE|ACTIVE|SESSIONS'
 break on duration_secs
