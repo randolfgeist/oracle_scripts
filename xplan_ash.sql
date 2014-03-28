@@ -10,8 +10,8 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      4.0
---               December 2013
+-- Version:      4.01
+--               March 2014
 --
 -- Author:       Randolf Geist
 --               http://oracle-randolf.blogspot.com
@@ -412,6 +412,35 @@ doc
 --
 -- Change Log:
 --
+--               4.01: March 2014
+--                    - More info for RAC Cross Instance Parallel Execution: Many sections now show a GLOBAL aggregate info in addition to instance-specific data
+--
+--                    - The Parallel Execution Server Set detection and ASSUMED_DEGREE info now makes use of the undocumented PX_STEP_ID and PX_STEPS_ARG info (bit mask part of the PX_FLAGS column)
+--                      on 11.2.0.2+
+--
+--                    - Since version 4.0 added from 11.2.0.2 on the PX *MAX* DOP in the "SQL statement execution ASH Summary" based on new PX_FLAGS column of ASH
+--                      it makes sense to add a PX *MIN* DOP in the summary to see at one glance if different DOPs were used or not
+--
+--                    - The "Active DOPs" column in the "Activity Timeline based on ASH" was extended/modified: The number in parantheses is no longer the simple count of samples
+--                      but the Average Active Sessions (AAS) per DFO / bucket. From 11.2.0.2 it now shows also the DOP of the DFO in brackets, so the output could look now like this:
+--
+--                      1[16] (14.5)
+--
+--                      which means DFO 1 at a DOP of 16 had an AAS value of 14.5 for this time bucket. If there are multiple DFOs active in the time bucket, they are separated by commas:
+--
+--
+--                      1[16] (3.5),2[4] (1.5)
+--
+--                      which means DFO 1 at a DOP of 16 had an AAS value of 3.5 and DFO 2 at a DOP of 4 had an AAS value of 1.5 for this time bucket
+--
+--                    - The "Real-Time SQL Monitoring Execution Summary" section now shows a PX *MIN* DOP information, too, based on the monitoring information.
+--                      Note that from version 11.2 on there is a column PX_MAXDOP, but no PX_MINDOP column. So from version 11.2 on for PX_MAXDOP the column value will be used.
+--                      For pre-11.2 versions the PX_MAXDOP is calculated using an analytic function on the monitoring data
+--                      In the same way the PX_MINDOP information is now calculated in all versions that support monitoring
+--
+--                      Please note that both PX_MAXDOP and PX_MINDOP are unreliable in 11.1 when the execution plan consists of multiple DFOs
+--                      I just realized that my wording might be misleading - "DFOs" are probably better called "DFO trees" - so please consider "DFO trees" whenever reading "DFOs" here
+--
 --               4.0:  December 2013
 --                    - New MIN/MAX figures when showing I/O related analysis. Useful if you want to see peak throughput information (e.g. Exadata)
 --
@@ -599,7 +628,7 @@ doc
 --                    - From 11.2.0.2 on the PX *MAX* DOP will be shown in the "SQL statement execution ASH Summary" as found in the new PX_FLAGS column of ASH
 --
 --                    - If Parallel Execution is detected and an execution plan can be found the "Activity Timeline based on ASH" shows an additional "Active DFO(s)" column
---                      so that you can follow the activity of DFOs - this in particular helpful for parallel execution plans with multiple DFOs
+--                      so that you can follow the activity of DFOs - in particular helpful for parallel execution plans with multiple DFOs
 --
 --                    - The internal queries are now by default all set to "quiet" mode so that the output of XPLAN_ASH can be spooled to a file
 --                      You will still see some spurious blank lines but the output is much more useful than in previous releases
@@ -881,7 +910,7 @@ define curr_third_id = "''''p.inst_id = '''' || :inst_id"
 define curr_sqltext = "gv$sqlstats"
 
 /* For GV$SQLSTATS we need to join on instance_id in addition */
-define curr_sqltext_join = "a.instance_id = sql.inst_id (+)"
+define curr_sqltext_join = "a.min_instance_id = sql.inst_id (+)"
 
 /* For GV$SQLSTATS we need to join on instance_id in addition */
 define curr_sqltext_join_col = "inst_id"
@@ -1004,10 +1033,10 @@ define sash_third_id = "''''1 = 1 --'''' || :inst_id"
 /* For mixed ASH we take SQL text from SASH_SQLTXT */
 define sash_sqltext = "sash_sqltxt"
 
-/* For DBA_HIST_SQL_TEXT we don't need to join on instance_id in addition */
+/* For SASH_SQL_TXT we don't need to join on instance_id in addition */
 define sash_sqltext_join = "1 = 1"
 
-/* For DBA_HIST_SQL_TEXT we don't need to join on instance_id in addition */
+/* For SASH_SQL_TXT we don't need to join on instance_id in addition */
 define sash_sqltext_join_col = "1 as inst_id"
 
 -----------------------
@@ -1351,7 +1380,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V4.0 (C) 2012, 2013 Randolf Geist
+prompt XPLAN_ASH V4.01 (C) 2012-2014 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Legend for graphs:
@@ -2775,6 +2804,7 @@ set heading on
 column status                                                                                         null "UNAVAILABLE"
 column username                                                            &_IF_ORA112_OR_HIGHERP.print
 column px_is_cross_instance  heading "PX IS|CROSS|INST"     format a5      &_IF_ORA112_OR_HIGHERP.print null "N/A"
+column px_mindop             heading "PX|MIN|DOP"           just left                                   null "N/A"
 column px_maxdop             heading "PX|MAX|DOP"           just left                                   null "N/A"
 column px_instances          heading "PX|INSTANCES"         just left      &_IF_ORA112_OR_HIGHERP.print null "N/A"
 column px_servers_requested  heading "PX|SERVERS|REQUESTED" just left      &_IF_ORA112_OR_HIGHERP.print null "N/A"
@@ -2818,8 +2848,10 @@ monitor_info1 as
 &use_monitor &_IF_ORA112_OR_HIGHER             , max(case when px_qcsid is null then px_is_cross_instance end)                         as px_is_cross_instance
 &use_monitor &_IF_LOWER_THAN_ORA112            , cast(NULL as varchar2(1))                                                             as px_is_cross_instance
 &use_no_monitor           , cast(NULL as varchar2(1))  as px_is_cross_instance
+&use_monitor              , min(case when px_qcsid is not null then cnt_px_server end)                                                 as px_mindop
+&use_no_monitor           , cast(NULL as number)       as px_mindop
 &use_monitor &_IF_ORA112_OR_HIGHER             , max(case when px_qcsid is null then px_maxdop end)                                    as px_maxdop
-&use_monitor &_IF_LOWER_THAN_ORA112            , max(cnt_px_server)                                                                    as px_maxdop
+&use_monitor &_IF_LOWER_THAN_ORA112            , max(case when px_qcsid is not null then cnt_px_server end)                            as px_maxdop
 &use_no_monitor           , cast(NULL as number)       as px_maxdop
 &use_monitor &_IF_ORA112_OR_HIGHER             , max(case when px_qcsid is null then px_maxdop_instances end)                          as px_instances
 &use_monitor &_IF_LOWER_THAN_ORA112            , cast(NULL as number)                                                                  as px_instances
@@ -2887,6 +2919,7 @@ monitor_info2 as
         , service_name
         , program
         , px_is_cross_instance
+        , px_mindop
         , px_maxdop
         , px_instances
         , px_servers_requested
@@ -2919,6 +2952,7 @@ monitor_info3 as
         , service_name
         , program
         , px_is_cross_instance
+        , px_mindop
         , px_maxdop
         , px_instances
         , px_servers_requested
@@ -2962,6 +2996,7 @@ select
         status
       , username
       , px_is_cross_instance
+      , px_mindop
       , px_maxdop
       , px_instances
       , px_servers_requested
@@ -3068,6 +3103,7 @@ from
 column status                clear
 column username              clear
 column px_is_cross_instance  clear
+column px_mindop             clear
 column px_maxdop             clear
 column px_instances          clear
 column px_servers_requested  clear
@@ -3144,6 +3180,7 @@ column duration                         heading "DURATION|ACTIVE"
 column average_as_t                     heading "AVERAGE AS|TOTAL"
 column average_as                       heading "AVERAGE AS|ACTIVE"
 column px_maxdop             heading "PX MAX|DOP"                   null "N/A" &_IF_ORA11202_OR_HIGHERP.print
+column px_mindop             heading "PX MIN|DOP"                   null "N/A" &_IF_ORA11202_OR_HIGHERP.print
 column px_worker_count new_value slave_count heading "PX WORKER|COUNT"
 column px_worker_unique_count           heading "PX WORKER|UNIQUE COUNT"
 column top_level_sql_id      format a16 heading "TOP_LEVEL_SQL_ID"             &_IF_ORA11_OR_HIGHERP.print
@@ -3537,6 +3574,7 @@ select  /* XPLAN_ASH SQL_STATEMENT_EXECUTION_ASH_SUMMARY SQL_ID: &si */
       , round(px_send_receive_count / nullif(sample_count, 0) * 100)                as perc_px_send_rec
       , px_send_receive_on_cpu_count                                                as px_send_rec_cpu_count
       , round(px_send_receive_on_cpu_count / nullif(cpu_sample_count, 0) * 100)     as perc_px_send_rec_cpu
+      , case when min_actual_degree <= 1 then null else min_actual_degree end       as px_mindop
       , case when actual_degree <= 1 then null else actual_degree end               as px_maxdop
       , slave_count                                                                 as px_worker_count
       , slave_unique_count                                                          as px_worker_unique_count
@@ -3579,6 +3617,7 @@ from
                 , count(*)                                                                                                as sample_count
                 , sum(is_on_cpu)                                                                                          as cpu_sample_count
                 , max(trunc(px_flags / 2097152))                                                                          as actual_degree
+                , min(nullif(trunc(px_flags / 2097152), 0))                                                               as min_actual_degree
                 , count(distinct process)                                                                                 as slave_count
                 , count(distinct case when process is not null then process || '-' || session_id || '-' || session_serial# end) as slave_unique_count
                 , nvl(max(module), 'NULL')                                                                                as module
@@ -3643,6 +3682,7 @@ column in_cursor_close       clear
 column in_sequence_load      clear
 
 column px_maxdop             clear
+column px_mindop             clear
 column px_worker_count       clear
 column px_worker_unique_count clear
 
@@ -3667,15 +3707,21 @@ column status       clear
 column pga          clear
 column temp         clear
 
-column is_cross_instance   new_value _IF_CROSS_INSTANCE    &debug_internalp.print
+column is_cross_instance_p new_value _IF_CROSS_INSTANCE    &debug_internalp.print
+column is_cross_instance   new_value _IS_CROSS_INSTANCE    &debug_internalp.print
+column is_single_instance  new_value _IS_SINGL_INSTANCE    &debug_internalp.print
 
 select
-        case when to_number(nvl('&ic', '0')) > 1 then '' else 'no' end  as is_cross_instance
+        case when to_number(nvl('&ic', '0')) > 1 then '' else 'no' end  as is_cross_instance_p
+      , case when to_number(nvl('&ic', '0')) > 1 then '' else '--' end  as is_cross_instance
+      , case when to_number(nvl('&ic', '0')) > 1 then '--' else '' end  as is_single_instance
 from
         dual
 ;
 
-column is_cross_instance clear
+column is_cross_instance_p clear
+column is_cross_instance   clear
+column is_single_instance  clear
 
 set termout on
 
@@ -4417,7 +4463,7 @@ set heading on
 
 /* Summary information of other activity for the same session (e.g. recursive SQL, other cursors) during execution of main SQL based on ASH */
 
-column instance_id &_IF_CROSS_INSTANCE.print
+column instance_id &_IF_CROSS_INSTANCE.print null "GLOBAL"
 column sample_count new_value ca_sc
 column duration_secs_t                heading "DURATION SECS|TOTAL"
 column duration_t                     heading "DURATION|TOTAL"
@@ -4650,7 +4696,7 @@ base_data as
   select
           count(a.sample_time) as active_sessions
         , driver.timeline
-        , driver.instance_id
+        , decode(grouping(driver.instance_id), 1, -1, driver.instance_id) as instance_id
   from
           driver
         , ash_base_other a
@@ -4658,7 +4704,8 @@ base_data as
           a.ash_bucket (+) = driver.bucket
   and     a.instance_id (+) = driver.instance_id
   group by
-          driver.instance_id
+&_IS_SINGL_INSTANCE          driver.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(driver.instance_id, ())
         , driver.timeline
   --order by
   --        driver.instance_id
@@ -4760,11 +4807,12 @@ ash_pga_temp1 as
           sum(pga_allocated) as pga_per_bucket
         , sum(temp_space_allocated) as temp_per_bucket
         , bucket
-        , instance_id
+        , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
   from
           ash_data
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , bucket
 ),
 ash_pga_temp as
@@ -4831,7 +4879,7 @@ ash_pga_temp_fmt as
           ash_pga_temp_prefmt
 )
 select  /* XPLAN_ASH ASH_SESSION_SUMMARY_OTHER_ACTIVITY SQL_ID: &si */
-        a.instance_id
+        nullif(a.instance_id, -1) as instance_id
       , duration_secs_t
       , cast(nullif('+' || to_char(extract(day from numtodsinterval(duration_secs_t, 'SECOND')), 'TM') || ' ' || substr(to_char(numtodsinterval(duration_secs_t, 'SECOND')), 12, 8), '+ ') as varchar2(12)) as duration_t
       , duration_secs
@@ -4868,7 +4916,7 @@ select  /* XPLAN_ASH ASH_SESSION_SUMMARY_OTHER_ACTIVITY SQL_ID: &si */
 from
         (
           select
-                  a.instance_id
+                  decode(grouping(a.instance_id), 1, -1, a.instance_id)                                                as instance_id
                 , count(*)                                                                                             as sample_count
                 , round(max(ash_bucket) - min(ash_bucket) + &sample_freq)                                              as duration_secs_t
                 , count(distinct ash_bucket) * &sample_freq                                                            as duration_secs
@@ -4906,7 +4954,8 @@ from
           -- This prevents the aggregate functions to produce a single row
           -- in case of no rows generated to aggregate
           group by
-                  a.instance_id
+&_IS_SINGL_INSTANCE          a.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(a.instance_id, ())
         ) a
       , ash_pga_temp_fmt
       , median_as m
@@ -4914,7 +4963,7 @@ where
         a.instance_id = ash_pga_temp_fmt.instance_id
 and     a.instance_id = m.instance_id
 order by
-        a.instance_id
+        instance_id nulls first
 ;
 
 column instance_id          clear
@@ -5027,7 +5076,7 @@ column pga               format a10   heading "MAX_PGA"  noprint
 column temp              format a10   heading "MAX_TEMP" noprint
 column px_worker_count                heading "PX WORKER|COUNT"
 column px_worker_unique_count         heading "PX WORKER|UNIQUE COUNT"
-column instance_id       &_IF_CROSS_INSTANCE.print
+column instance_id       &_IF_CROSS_INSTANCE.print null "GLOBAL"
 column is_sqlid_current     format a7 heading "IS|SQLID|CURRENT" &_IF_ORA112_OR_HIGHERP.print
 column in_connection_mgmt   format a7 heading "IN|CONNECT|MGMT"  &_IF_ORA11_OR_HIGHERP.print
 column in_parse             format a7 heading "IN|PARSE"         &_IF_ORA11_OR_HIGHERP.print
@@ -5251,7 +5300,7 @@ base_data as
         , count(a.sample_time) as active_sessions
         , driver.sql_id
         , driver.timeline
-        , driver.instance_id
+        , decode(grouping(driver.instance_id), 1, -1, driver.instance_id) as instance_id
   from
           driver
         , ash_base_other a
@@ -5260,7 +5309,8 @@ base_data as
   and     a.instance_id (+) = driver.instance_id
   and     a.sql_id (+) = driver.sql_id
   group by
-          driver.instance_id
+&_IS_SINGL_INSTANCE          driver.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(driver.instance_id, ())
         , driver.sql_id
         , driver.timeline
   --order by
@@ -5399,12 +5449,13 @@ ash_pga_temp1 as
           sum(pga_allocated) as pga_per_bucket
         , sum(temp_space_allocated) as temp_per_bucket
         , bucket
-        , instance_id
+        , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
         , sql_id
   from
           ash_data
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , sql_id
         , bucket
 ),
@@ -5487,13 +5538,14 @@ median_as as
             select
                     sample_time
                   , sql_id
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
                   , count(*) as active_sessions
             from
                     ash_base_other
             group by
                     sample_time
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , sql_id
           )
   group by
@@ -5501,7 +5553,7 @@ median_as as
         , sql_id
 )
 select  /* XPLAN_ASH ASH_SESSION_DETAILS_OTHER_ACTIVITY SQL_ID: &si */
-        a.instance_id
+        nullif(a.instance_id, -1)                                                                                                                       as instance_id
       , a.sql_id
       , coalesce(sql.sql_text, '<No SQL TEXT found>')                                                                                                   as sql_text
 &_IF_ORA11_OR_HIGHER                  , a.top_level_sql_id
@@ -5540,7 +5592,8 @@ select  /* XPLAN_ASH ASH_SESSION_DETAILS_OTHER_ACTIVITY SQL_ID: &si */
 from
         (
           select
-                  instance_id
+                  decode(grouping(instance_id), 1, -1, instance_id)                                                    as instance_id
+                , min(instance_id)                                                                                     as min_instance_id
                 , sql_id
                 , to_char(min(sample_time), '&dm')                                                                     as first_sample
                 , to_char(max(sample_time), '&dm')                                                                     as last_sample
@@ -5573,7 +5626,8 @@ from
                   (instr('&op', 'ASH') > 0 or instr('&op', 'DISTRIB') > 0 or instr('&op', 'TIMELINE') > 0)
           and     '&ca_sc' is not null
           group by
-                  instance_id
+&_IS_SINGL_INSTANCE                  instance_id
+&_IS_CROSS_INSTANCE                  grouping sets(instance_id, ())
                 , sql_id
                 , dates.sql_exec_start
         ) a
@@ -5600,7 +5654,7 @@ and     a.instance_id = m.instance_id
 and     a.sql_id = sql.sql_id (+)
 and     &sqltext_join
 order by
-        a.instance_id
+        instance_id nulls first
       , a.sample_count desc
 ;
 
@@ -5678,7 +5732,7 @@ set heading on
 
 define ca_sc = ""
 
-column instance_id &_IF_CROSS_INSTANCE.print
+column instance_id &_IF_CROSS_INSTANCE.print null "GLOBAL"
 column sample_count new_value ca_sc
 column average_as_t                    heading "AVERAGE AS|TOTAL"
 column average_as                      heading "AVERAGE AS|ACTIVE"
@@ -5911,7 +5965,7 @@ base_data as
   select
           count(a.sample_time) as active_sessions
         , driver.timeline
-        , driver.instance_id
+        , decode(grouping(driver.instance_id), 1, -1, driver.instance_id) as instance_id
   from
           driver
         , ash_base_conc a
@@ -5919,7 +5973,8 @@ base_data as
           a.ash_bucket (+) = driver.bucket
   and     a.instance_id (+) = driver.instance_id
   group by
-          driver.instance_id
+&_IS_SINGL_INSTANCE          driver.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(driver.instance_id, ())
         , driver.timeline
   --order by
   --        driver.instance_id
@@ -6021,11 +6076,12 @@ ash_pga_temp1 as
           sum(pga_allocated) as pga_per_bucket
         , sum(temp_space_allocated) as temp_per_bucket
         , bucket
-        , instance_id
+        , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
   from
           ash_data
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , bucket
 ),
 ash_pga_temp as
@@ -6092,7 +6148,7 @@ ash_pga_temp_fmt as
           ash_pga_temp_prefmt
 )
 select  /* XPLAN_ASH GLOBAL_ASH_SUMMARY_CONCURRENT_EXECUTION SQL_ID: &si */
-        a.instance_id
+        nullif(a.instance_id, -1)                                                         as instance_id
       , sample_count
       , cpu_sample_count
       , round(cpu_sample_count / sample_count * 100)                                      as percentage_cpu
@@ -6128,7 +6184,7 @@ select  /* XPLAN_ASH GLOBAL_ASH_SUMMARY_CONCURRENT_EXECUTION SQL_ID: &si */
 from
         (
           select
-                  a.instance_id
+                  decode(grouping(instance_id), 1, -1, instance_id)    as instance_id
                 , count(*)                                             as sample_count
                 , round(count(*) / nullif(cast(to_number('&ds') as number), 0) * &sample_freq, 1) as average_as_t
                 --, count(*) / (((b.max_sample_time - b.min_sample_time) * 86400) + &sample_freq) * &sample_freq as average_as
@@ -6167,7 +6223,8 @@ from
           -- This prevents the aggregate functions to produce a single row
           -- in case of no rows generated to aggregate
           group by
-                  a.instance_id
+&_IS_SINGL_INSTANCE                  a.instance_id
+&_IS_CROSS_INSTANCE                  grouping sets(a.instance_id, ())
         ) a
       , ash_pga_temp_fmt
       , median_as m
@@ -6175,7 +6232,7 @@ where
         a.instance_id = ash_pga_temp_fmt.instance_id
 and     a.instance_id  = m.instance_id
 order by
-        a.instance_id
+        instance_id nulls first
 ;
 
 column instance_id          clear
@@ -6284,7 +6341,7 @@ column show_wait_times clear
 
 set termout on
 
-column instance_id &_IF_CROSS_INSTANCE.print
+column instance_id &_IF_CROSS_INSTANCE.print null "GLOBAL"
 column activity format a50
 column activity_class format a20
 column activity_graph format a&wgs
@@ -6335,12 +6392,13 @@ from
                     and     '&ca_sc' is not null
         )
 group by
-        instance_id
+&_IS_SINGL_INSTANCE        instance_id
+&_IS_CROSS_INSTANCE        grouping sets(instance_id, ())
       , activity
       , activity_class
       , total_cnt
 order by
-        instance_id
+        instance_id nulls first
       , sample_count desc
 ;
 
@@ -6411,7 +6469,7 @@ column temp              format a10   heading "MAX_TEMP" &_IF_ORA112_OR_HIGHERP.
 -- For the time being, do not print PGA/TEMP as it is more confusing that helpful if you don't know what it is based on
 --column pga               format a10 heading "MAX_PGA"  noprint
 --column temp              format a10 heading "MAX_TEMP" noprint
-column instance_id       &_IF_CROSS_INSTANCE.print
+column instance_id       &_IF_CROSS_INSTANCE.print null "GLOBAL"
 column is_sqlid_current     format a7 heading "IS|SQLID|CURRENT" &_IF_ORA112_OR_HIGHERP.print
 column in_connection_mgmt   format a7 heading "IN|CONNECT|MGMT"  &_IF_ORA11_OR_HIGHERP.print
 column in_parse             format a7 heading "IN|PARSE"         &_IF_ORA11_OR_HIGHERP.print
@@ -6633,12 +6691,13 @@ top_sqlid1 as
 (
   select
           sql_id
-        , instance_id
+        , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
         , count(*) as cnt
   from
           ash_base_conc
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , sql_id
 ),
 top_sqlid as
@@ -6677,7 +6736,7 @@ base_data as
         , count(a.sample_time) as active_sessions
         , driver.sql_id
         , driver.timeline
-        , driver.instance_id
+        , decode(grouping(driver.instance_id), 1, -1, driver.instance_id) as instance_id
   from
           driver
         , ash_base_conc a
@@ -6686,7 +6745,8 @@ base_data as
   and     a.instance_id (+) = driver.instance_id
   and     a.sql_id (+) = driver.sql_id
   group by
-          driver.instance_id
+&_IS_SINGL_INSTANCE          driver.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(driver.instance_id, ())
         , driver.sql_id
         , driver.timeline
   --order by
@@ -6836,12 +6896,13 @@ ash_pga_temp1 as
           sum(pga_allocated) as pga_per_bucket
         , sum(temp_space_allocated) as temp_per_bucket
         , bucket
-        , instance_id
+        , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
         , sql_id
   from
           ash_data
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , sql_id
         , bucket
 ),
@@ -6923,14 +6984,15 @@ from
           (
             select
                     sample_time
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
                   , sql_id
                   , count(*) as active_sessions
             from
                     topn_ash_base_conc
             group by
                     sample_time
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , sql_id
           )
   group by
@@ -6940,7 +7002,8 @@ from
 sql_details1 as
 (
   select
-          instance_id
+          decode(grouping(instance_id), 1, -1, instance_id)                                                    as instance_id
+        , min(instance_id)                                                                                     as min_instance_id
         , sql_id
         , to_char(min(sample_time), '&dm')                                                                     as first_sample
         , to_char(max(sample_time), '&dm')                                                                     as last_sample
@@ -6974,14 +7037,15 @@ sql_details1 as
   and     instr('&op', 'LIMITED_ASH') = 0
   and     '&ca_sc' is not null
   group by
-          instance_id
+&_IS_SINGL_INSTANCE          instance_id
+&_IS_CROSS_INSTANCE          grouping sets(instance_id, ())
         , sql_id
         , dates.sql_exec_start
 ),
 sql_details as
 (
   select
-          a.instance_id
+          nullif(a.instance_id, -1)                                                                                                                       as instance_id
         , a.sql_id
 &_IF_ORA11_OR_HIGHER         , top_level_sql_id
         , row_number() over (partition by a.instance_id order by sample_count desc)                                                                       as rn
@@ -7084,7 +7148,7 @@ from
 --where
 --        rn <= &topn_sqlid
 order by
-        instance_id
+        instance_id nulls first
       , sample_count desc
 ;
 
@@ -8006,6 +8070,10 @@ ash_base as
 &_IF_LOWER_THAN_ORA11         , trunc(round((cast(sample_time as date) - &sample_freq / 86400 - to_date('&ls', '&dm')) * 86400) / &sample_freq) * &sample_freq   as ash_prev_bucket
 &_IF_ORA11202_OR_HIGHER       , px_flags
 &_IF_LOWER_THAN_ORA11202      , null as px_flags
+&_IF_ORA11202_OR_HIGHER       , trunc(mod(px_flags/65536, 32)) as px_step_id
+&_IF_LOWER_THAN_ORA11202      , null as px_step_id
+&_IF_ORA11202_OR_HIGHER       , mod(px_flags, 65536) as px_step_arg
+&_IF_LOWER_THAN_ORA11202      , null as px_step_arg
 &_IF_ORA11_OR_HIGHER          , ash.sql_exec_start
 &_IF_ORA11_OR_HIGHER          , count(*) over (partition by ash.sql_exec_start)                        as cnt_sql_exec_start
 &_IF_LOWER_THAN_ORA11         , to_date('01.01.1970', 'DD.MM.YYYY')                                    as sql_exec_start
@@ -8039,28 +8107,34 @@ dfo_info as
   and     '&plan_exists' is not null
   and     '&_IF_ORA11_OR_HIGHER' is null
 ),
-/* Parallel Degree DOP info taken from Real-Time SQL Monitoring if available / requested */
+/* Parallel Degree DOP info taken from Real-Time SQL Monitoring if available / requested (only from 11.2 on reliable) */
 monitor_dop_info as
 (
   select
-&use_monitor              inst_id
+&use_monitor &_IF_ORA112_OR_HIGHER              inst_id
+&use_monitor &_IF_LOWER_THAN_ORA112             0 as inst_id
 &use_no_monitor           0 as inst_id
-&use_monitor            , sid
+&use_monitor &_IF_ORA112_OR_HIGHER            , sid
+&use_monitor &_IF_LOWER_THAN_ORA112           , 0 as sid
 &use_no_monitor         , 0 as sid
-&use_monitor            , session_serial#
+&use_monitor &_IF_ORA112_OR_HIGHER            , session_serial#
+&use_monitor &_IF_LOWER_THAN_ORA112           , 0 as session_serial#
 &use_no_monitor         , 0 as session_serial#
-&use_monitor            , count(*) over (partition by px_server_group, px_server_set) as monitor_dop
+&use_monitor &_IF_ORA112_OR_HIGHER            , count(*) over (partition by px_server_group, px_server_set) as monitor_dop
+&use_monitor &_IF_LOWER_THAN_ORA112           , 0  as monitor_dop
 &use_no_monitor         , 0  as monitor_dop
   from
-&use_monitor              gv$sql_monitor m
+&use_monitor &_IF_ORA112_OR_HIGHER              gv$sql_monitor m
+&use_monitor &_IF_LOWER_THAN_ORA112             dual
 &use_no_monitor           dual
   where
-&use_monitor              1 = 1
+&use_monitor &_IF_ORA112_OR_HIGHER              1 = 1
+&use_monitor &_IF_LOWER_THAN_ORA112             1 = 2
 &use_no_monitor           1 = 2
-&use_monitor      and     m.sql_id = '&si'
-&use_monitor      and     m.sql_exec_start = to_date('&ls', '&dm')
-&use_monitor      and     m.sql_exec_id = &li
-&use_monitor      and     m.px_qcsid is not null
+&use_monitor &_IF_ORA112_OR_HIGHER      and     m.sql_id = '&si'
+&use_monitor &_IF_ORA112_OR_HIGHER      and     m.sql_exec_start = to_date('&ls', '&dm')
+&use_monitor &_IF_ORA112_OR_HIGHER      and     m.sql_exec_id = &li
+&use_monitor &_IF_ORA112_OR_HIGHER      and     m.px_qcsid is not null
 ),
 ash_dfo as
 (
@@ -8076,7 +8150,8 @@ ash_dfo as
         , cnt_sql_exec_start
         , min(sql_exec_start) keep (dense_rank last order by cnt_sql_exec_start nulls first) over () as min_sql_exec_start
         , p.dfo
-        , count(distinct instance_id || '-' || process) over (partition by p.dfo, p.tq_id) as cnt_process
+&_IF_LOWER_THAN_ORA11202        , count(distinct instance_id || '-' || process) over (partition by p.dfo, p.tq_id) as cnt_process
+&_IF_ORA11202_OR_HIGHER         , count(distinct instance_id || '-' || process) over (partition by p.dfo, ash.px_step_id, ash.px_step_arg) as cnt_process
         , m.monitor_dop
   from
           ash_base ash
@@ -8603,8 +8678,8 @@ ash_dfo2 as
           instance_id
         , dfo
         , process
-        --, px_step_id
-        --, px_step_arg
+        , px_step_id
+        , px_step_arg
         , tq_id
         , set_count
   from
@@ -8624,7 +8699,7 @@ px_sets1 as
         , count(distinct process) as cnt_proc
         , instance_id
         , dfo
-        , tq_id
+        --, tq_id
         --, px_step_id
         --, px_step_arg
   from
@@ -8634,9 +8709,9 @@ px_sets1 as
   group by
           instance_id
         , dfo
-        , tq_id
-        --, px_step_id
-        --, px_step_arg
+&_IF_LOWER_THAN_ORA11202        , tq_id
+&_IF_ORA11202_OR_HIGHER         , px_step_id
+&_IF_ORA11202_OR_HIGHER         , px_step_arg
 --  ---------
 --  union all
 --  ---------
@@ -9747,11 +9822,13 @@ set termout off
 column show_io_cols new_value _SHOW_IO_COLS &debug_internalp.print
 column aas_size new_value aas_size          &debug_internalp.print
 column show_dfo_col new_value _SHOW_DFO_COL &debug_internalp.print
+column dop_header new_value _DOP_HEADER     &debug_internalp.print
 
 select
         case when (('&_EXPERIMENTAL' is null and '&_IF_ORA112_OR_HIGHER' is null) or '&_IF_ORA11203_OR_HIGHER' is null) then '' else 'no' end as show_io_cols
       , to_char(&aas + 8, 'TM') as aas_size
       , case when '&slave_count' is not null and '&plan_exists' is not null and '&_IF_ORA11_OR_HIGHER' is null then '' else 'no' end as show_dfo_col
+      , case when '&_IF_ORA11202_OR_HIGHER' is null then ' [DOP]' else '' end as dop_header
 from
         dual
 ;
@@ -9759,13 +9836,14 @@ from
 column show_io_cols clear
 column aas_size clear
 column show_dfo_col clear
+column dop_header clear
 
 set termout on
 
 column average_as_graph format a&aas_size heading 'AVERAGE|ACTIVE SESSIONS|GRAPH'
 -- Hide this column as it usually doesn't add much value
 column median_as_graph format a&aas_size heading 'MEDIAN|ACTIVE SESSIONS|GRAPH' &show_median.print
-column instance_id &_IF_CROSS_INSTANCE.print
+column instance_id &_IF_CROSS_INSTANCE.print null "GLOBAL"
 
 column pga  format a6 &_IF_ORA112_OR_HIGHERP.print
 column temp format a6 &_IF_ORA112_OR_HIGHERP.print
@@ -9784,7 +9862,7 @@ column m_rr_s format a6 heading 'MEDIAN|RE_REQ|SIZE'  &_SHOW_IO_COLS.print
 column a_wr_s format a6 heading 'AVG|WR_REQ|SIZE'     &_SHOW_IO_COLS.print
 column m_wr_s format a6 heading 'MEDIAN|WR_REQ|SIZE'  &_SHOW_IO_COLS.print
 column plan_lines format a40 heading 'TOP|ACTIVE|PLAN LINES' &_IF_ORA11_OR_HIGHERP.print
-column dfo_active format a20 heading 'ACTIVE|DFOS'    &_SHOW_DFO_COL.print
+column dfo_active format a25 heading 'ACTIVE|DFOS&_DOP_HEADER (AAS)' &_SHOW_DFO_COL.print
 column activities format a120 heading 'TOP|ACTIVITIES'
 column processes  format a85 heading 'TOP|PROCESSES'
 column average_as heading 'AVERAGE|ACTIVE|SESSIONS'
@@ -9847,6 +9925,8 @@ ash_base as
 &_IF_LOWER_THAN_ORA112        , to_number(null) as delta_write_request_size
 &_IF_ORA112_OR_HIGHER         , case when cast(sample_time as date) - round(delta_time / 1000000) / 86400 >= coalesce(sql_exec_start, to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS')) - &sample_freq / 86400 then delta_interconnect_io_bytes else null end                               as delta_interconnect_io_bytes
 &_IF_LOWER_THAN_ORA112        , to_number(null) as delta_interconnect_io_bytes
+&_IF_ORA11202_OR_HIGHER       , trunc(px_flags / 2097152) as actual_degree
+&_IF_LOWER_THAN_ORA11202      , to_number(null) as actual_degree
   from
           &global_ash ash
   where
@@ -9973,6 +10053,7 @@ ash_data1 as
         , ash.delta_read_request_size
         , ash.delta_write_request_size
         , ash.delta_interconnect_io_bytes
+        , ash.actual_degree
         , cast(to_char(null) as varchar2(1)) as artificial_indicator
   from
           timeline_inst t
@@ -10014,6 +10095,7 @@ ash_data1 as
         , ash.delta_read_request_size
         , ash.delta_write_request_size
         , ash.delta_interconnect_io_bytes
+        , ash.actual_degree
         , ash.artificial_indicator
   from
           timeline_inst t
@@ -10039,6 +10121,7 @@ ash_data1 as
                   , case when lvl = &sample_freq then ash.delta_read_request_size end as delta_read_request_size
                   , case when lvl = &sample_freq then ash.delta_write_request_size end as delta_write_request_size
                   , case when lvl = &sample_freq then ash.delta_interconnect_io_bytes end as delta_interconnect_io_bytes
+                  , case when lvl = &sample_freq then ash.actual_degree end as actual_degree
                   , case when lvl > &sample_freq then 'Y' else null end as artificial_indicator
             from
                     ash_base ash
@@ -10089,6 +10172,7 @@ ash_data as
         , null as delta_read_request_size
         , null as delta_write_request_size
         , null as delta_interconnect_io_bytes
+        , null as actual_degree
         , null as artificial_indicator
   from
           timeline_inst t
@@ -10106,7 +10190,7 @@ ash_data as
 )
 ,
 /* Define the target buckets */
-ash_bkts as
+ash_bkts1 as
 (
   select
           instance_id
@@ -10121,6 +10205,20 @@ ash_bkts as
             from
                     ash_data
           )
+),
+ash_bkts as
+(
+  select
+          decode(grouping(instance_id), 1, -1, instance_id) as instance_id
+        , duration_secs
+        , bkt
+  from
+          ash_bkts1
+  group by
+          duration_secs
+&_IS_SINGL_INSTANCE        , instance_id
+&_IS_CROSS_INSTANCE        , grouping sets(instance_id, ())
+        , bkt
 ),
 /* The most active plan lines */
 /* Count occurrence per sample_time and execution plan line */
@@ -10137,7 +10235,7 @@ ash_plan_lines as
                     duration_secs
                   , count(*) as cnt
                   , case when session_state is null then null else nvl(to_char(sql_plan_line_id, 'TM'), 'NULL') end as sql_plan_line_id
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
             from
                     ash_data
             /* Ignore PGA/TEMP artificial rows here */
@@ -10145,7 +10243,8 @@ ash_plan_lines as
                     artificial_indicator is null
             group by
                     duration_secs
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , case when session_state is null then null else nvl(to_char(sql_plan_line_id, 'TM'), 'NULL') end
           )
 ),
@@ -10212,7 +10311,7 @@ ash_activity as
                     duration_secs
                   , count(*) as cnt
                   , case when session_state is null then null else activity end as activity
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
             from
                     ash_data
             /* Ignore PGA/TEMP artificial rows here */
@@ -10220,7 +10319,8 @@ ash_activity as
                     artificial_indicator is null
             group by
                     duration_secs
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , case when session_state is null then null else activity end
           )
 ),
@@ -10287,7 +10387,7 @@ ash_process as
                     duration_secs
                   , count(*) as cnt
                   , case when session_state is null then null else process end as process
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
             from
                     ash_data
             /* Ignore PGA/TEMP artificial rows here */
@@ -10295,7 +10395,8 @@ ash_process as
                     artificial_indicator is null
             group by
                     duration_secs
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , case when session_state is null then null else process end
           )
 ),
@@ -10388,6 +10489,7 @@ ash_dfo2 as
 (
   select
           cnt
+        , dop
         , dfo
         , instance_id
         , duration_secs
@@ -10396,8 +10498,9 @@ ash_dfo2 as
             select
                     duration_secs
                   , count(*) as cnt
+                  , max(actual_degree) as dop
                   , dfo
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id) as instance_id
             from
                     ash_dfo1
             /* Ignore PGA/TEMP artificial rows here */
@@ -10405,7 +10508,8 @@ ash_dfo2 as
                     artificial_indicator is null
             group by
                     duration_secs
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
                   , dfo
           )
 ),
@@ -10413,7 +10517,8 @@ ash_dfo2 as
 ash_dfo_bkts as
 (
   select
-          sum(a.cnt) as cnt
+          avg(a.cnt) as cnt
+        , max(a.dop) as dop
 --        , max(a.duration_secs) as duration_secs
         , a.dfo
         , a.instance_id
@@ -10434,6 +10539,7 @@ ash_dfo_bkts_rn as
 (
   select
           cnt
+        , dop
         , dfo
         , instance_id
         , bkt
@@ -10450,8 +10556,8 @@ ash_dfo_bkts_agg as
           instance_id
 --        , max(duration_secs) as duration_secs
         , bkt
-&_IF_ORA112_OR_HIGHER           , listagg(dfo || '(' || cnt || ')', ',') within group (order by rn) as dfo_active
-&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", ',' || dfo || '(' || cnt || ')') order by rn), '/V/text()'), ',') as dfo_active
+&_IF_ORA112_OR_HIGHER           , listagg(dfo || case when dop is not null then '[' || dop || '] ' end || '(' || case when cnt >= &rnd_thr then round(cnt) else round(cnt, 1) end || ')', ',') within group (order by rn) as dfo_active
+&_IF_LOWER_THAN_ORA112          , ltrim(extract(xmlagg(xmlelement("V", ',' || dfo || '(' || case when cnt >= &rnd_thr then round(cnt) else round(cnt, 1) end || ')') order by rn), '/V/text()'), ',') as dfo_active
   from
           ash_dfo_bkts_rn
   group by
@@ -10510,12 +10616,13 @@ ash_distrib as
                   , avg(delta_write_request_size)                                 as avg_write_req_size
                   , median(delta_write_request_size)                              as med_write_req_size
 */
-                  , instance_id
+                  , decode(grouping(instance_id), 1, -1, instance_id)             as instance_id
             from
                     ash_data
             group by
                     duration_secs
-                  , instance_id
+&_IS_SINGL_INSTANCE                  , instance_id
+&_IS_CROSS_INSTANCE                  , grouping sets(instance_id, ())
           )
 ),
 /* and compress into the target number of buckets */
@@ -10582,7 +10689,7 @@ ash_distrib_bkts as
 ash_distrib_per_bkt as
 (
   select
-          a.instance_id
+          decode(grouping(a.instance_id), 1, -1, a.instance_id)         as instance_id
         , b.bkt
         , max(a.duration_secs)                                          as duration_secs
         , round(avg(delta_read_request_size))                           as avg_read_req_size
@@ -10596,7 +10703,8 @@ ash_distrib_per_bkt as
           a.instance_id = b.instance_id
   and     a.duration_secs = b.duration_secs
   group by
-          a.instance_id
+&_IS_SINGL_INSTANCE          a.instance_id
+&_IS_CROSS_INSTANCE          grouping sets(a.instance_id, ())
         , b.bkt
 ),
 /* We need some log based data for formatting the figures */
@@ -10950,7 +11058,7 @@ select  /* XPLAN_ASH ACTIVITY_TIMELINE SQL_ID: &si */
         /* Very long hard parse times with 11.2.0.1 optimizer features and S-ASH views */
         /* Therefore falling back to 11.1.0.7 optimizer features */
         /*+ optimizer_features_enable('11.1.0.7') */
-        a.instance_id
+        nullif(a.instance_id, -1)    as instance_id
       , a.duration_secs
       , lpad(pga_mem_format, 6)      as pga
       , lpad(temp_space_format, 6)   as temp
@@ -10998,7 +11106,7 @@ and     a.instance_id = e.instance_id (+)
 and     a.bkt = e.bkt (+)
 order by
         duration_secs
-      , instance_id
+      , instance_id nulls first
 ;
 
 column pga  clear
@@ -11035,6 +11143,7 @@ clear breaks
 undefine _SHOW_IO_COLS
 undefine aas_size
 undefine _SHOW_DFO_COL
+undefine _DOP_HEADER
 
 -- If you need to debug, comment the following line
 set termout off
@@ -12937,6 +13046,8 @@ undefine _IF_ORA11202_OR_HIGHERP
 undefine _IF_ORA112_OR_HIGHERP
 undefine _IF_ORA11_OR_HIGHERP
 undefine _IF_CROSS_INSTANCE
+undefine _IS_CROSS_INSTANCE
+undefine _IS_SINGL_INSTANCE
 undefine _SQL_EXEC2
 undefine plan_table_name
 undefine las
