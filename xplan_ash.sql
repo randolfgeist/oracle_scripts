@@ -10,8 +10,8 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      4.2
---               December 2014
+-- Version:      4.21
+--               January 2015
 --
 -- Author:       Randolf Geist
 --               http://oracle-randolf.blogspot.com
@@ -47,7 +47,7 @@ doc
 -- Versions:     This utility will work from version 10.2 and later
 --               The ASH based information on plan line level is only available from 11g on (10g has ASH but no relation to SQL execution instances or SQL plan lines)
 --
---               Tested with database versions 10.2.0.4, 10.2.0.5, 11.1.0.7, 11.2.0.1, 11.2.0.2 and 11.2.0.3, 12.1.0.1
+--               Tested with database versions 10.2.0.4, 10.2.0.5, 11.1.0.7, 11.2.0.1, 11.2.0.2 and 11.2.0.3, 11.2.0.4, 12.1.0.1, 12.1.0.2
 --
 --               Tested with SQL*Plus / client versions 10.2.0.4, 11.1.0.7, 11.2.0.1, 11.2.0.2, 12.1.0.1 including InstantClient 11.2.0.1
 --
@@ -453,7 +453,19 @@ doc
 --
 -- Change Log:
 --
---               4.2:  November 2014
+--               4.21: January 2015
+--                    - Forgot to address a minor issue where the SET_COUNT determined per DFO_TREE (either one or two slave sets) is incorrect in the special case of DFO trees having only S->P distributions (pre-12c style)
+--                      Previous versions used a SET_COUNT of 2 in such a case which is incorrect, since there is only one slave set. 12c changes this behaviour with the new PX SELECTOR operator and requires again two sets.
+--
+--                    - For RAC Cross Instance Parallel Execution specific output some formatting and readability was improved (more linebreaks etc.)
+--
+--                    - Minor SQL issue fixed in "SQL statement execution ASH Summary" that prevented execution in 10.2 (ORA-32035)
+--
+--                    - The NO_STATEMENT_QUEUING hint prevented the "OPTIMIZER_FEATURES_ENABLE" hint from being recognized, therefore some queries failed in 11.2.0.1 again with ORA-03113. Fixed
+--
+--                    - "ON CPU" now distinguishes between "ON CPU INMEMORY" and "ON CPU" for inmemory scans
+--
+--               4.2:  December 2014
 --                    - New sections "Concurrent activity I/O Summary based on ASH" and "Concurrent activity I/O Summary per Instance based on ASH" to see the I/O activity summary for concurrent activity
 --
 --                    - Bug fixed: When using MONITOR as source for searching for the most recent SQL_ID executed by a given SID due to some filtering on date no SQL_ID was found. This is now fixed
@@ -469,6 +481,9 @@ doc
 --                    - Most queries now use a NO_STATEMENT_QUEUING hint for environments where AUTO DOP is enabled and the XPLAN_ASH queries could get queued otherwise
 --
 --                    - The physical I/O bytes on execution plan line level taken from "Real-Time SQL Monitoring" has now the more appropriate heading "ReadB" and "WriteB", I never liked the former misleading "Reads"/"Writes" heading
+--
+--                    - Many averages and medians now also have accompanying minimum and maximum values shown. This isn't as good as having histograms but gives a better idea of the range of values,
+--                      and how outliers might influence the averages and deserve further investigations
 --
 --               4.1:  June 2014
 --                    - GV$SQL_MONITOR and GV$SQL_PLAN_MONITOR can now be customized in the settings as table names in case you want to use your own custom monitoring repository that copies data
@@ -1444,6 +1459,8 @@ col ora11203_higher new_value _IF_ORA11203_OR_HIGHER  &debug_internalp.print
 col ora11203_lower  new_value _IF_LOWER_THAN_ORA11203 &debug_internalp.print
 col ora12_higher    new_value _IF_ORA12_OR_HIGHER     &debug_internalp.print
 col ora12_lower     new_value _IF_LOWER_THAN_ORA12    &debug_internalp.print
+col ora12102_higher new_value _IF_ORA12102_OR_HIGHER  &debug_internalp.print
+col ora12102_lower  new_value _IF_LOWER_THAN_ORA12102 &debug_internalp.print
 
 select
         case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11' then '' else '--'       end as ora11_higher
@@ -1456,6 +1473,8 @@ select
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2.0.3' then '--' else '' end as ora11203_lower
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12' then '' else '--'       end as ora12_higher
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12' then '--' else ''       end as ora12_lower
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12.1.0.2' then '' else '--' end as ora12102_higher
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12.1.0.2' then '--' else '' end as ora12102_lower
 from
         (select coalesce(case when '&SASH_DB_VERSION' is not null then 'Release &SASH_DB_VERSION ' end, banner) as banner from v$version)
 where
@@ -1539,7 +1558,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V4.2 (C) 2012-2014 Randolf Geist
+prompt XPLAN_ASH V4.21 (C) 2012-2015 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Legend for graphs:
@@ -1553,7 +1572,7 @@ prompt ------------------------------------------------
 -- If you need to debug, comment the following line
 set termout off
 
--- Enable LATERAL views - required for being able to use the LATERAL view syntax
+-- Enable LATERAL views - required for being able to use the LATERAL view syntax in pre-12c
 variable no_alter_session_priv varchar2(1)
 
 exec :no_alter_session_priv := null
@@ -2810,6 +2829,8 @@ col ora11203_higher new_value _IF_ORA11203_OR_HIGHER  &debug_internalp.print
 col ora11203_lower  new_value _IF_LOWER_THAN_ORA11203 &debug_internalp.print
 col ora12_higher    new_value _IF_ORA12_OR_HIGHER     &debug_internalp.print
 col ora12_lower     new_value _IF_LOWER_THAN_ORA12    &debug_internalp.print
+col ora12102_higher new_value _IF_ORA12102_OR_HIGHER  &debug_internalp.print
+col ora12102_lower  new_value _IF_LOWER_THAN_ORA12102 &debug_internalp.print
 
 select
         case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11' then '' else '--'       end as ora11_higher
@@ -2822,6 +2843,8 @@ select
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '11.2.0.3' then '--' else '' end as ora11203_lower
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12' then '' else '--'       end as ora12_higher
       , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12' then '--' else ''       end as ora12_lower
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12.1.0.2' then '' else '--' end as ora12102_higher
+      , case when substr( banner, instr(banner, 'Release ') + 8, instr(substr(banner,instr(banner,'Release ') + 8),' ') ) >= '12.1.0.2' then '--' else '' end as ora12102_lower
 from
         (select coalesce(case when '&SASH_DB_VERSION' is not null then 'Release 10.2.0.4 ' end, banner) as banner from v$version)
 where
@@ -3568,25 +3591,25 @@ driver as
   from
           timeline_inst b
 ),
-base_data as
-(
-  select
-          count(a.sample_time) as active_sessions
-        , driver.timeline
-        , driver.instance_id
-  from
-          driver
-        , ash_base a
-  where
-          a.ash_bucket (+) = driver.bucket
-  and     a.instance_id (+) = driver.instance_id
-  group by
-          driver.instance_id
-        , driver.timeline
-  --order by
-  --        driver.instance_id
-  --      , driver.timeline
-),
+--base_data as
+--(
+--  select
+--          count(a.sample_time) as active_sessions
+--        , driver.timeline
+--        , driver.instance_id
+--  from
+--          driver
+--        , ash_base a
+--  where
+--          a.ash_bucket (+) = driver.bucket
+--  and     a.instance_id (+) = driver.instance_id
+--  group by
+--          driver.instance_id
+--        , driver.timeline
+--  --order by
+--  --        driver.instance_id
+--  --      , driver.timeline
+--),
 base_data_g as
 (
   select
@@ -4723,6 +4746,8 @@ column in_bind              format a7 heading "IN|BIND"          &_IF_ORA11_OR_H
 column in_cursor_close      format a7 heading "IN|CURSOR|CLOSE"  &_IF_ORA11_OR_HIGHERP.print
 column in_sequence_load     format a7 heading "IN|SEQ|LOAD"      &_IF_ORA112_OR_HIGHERP.print
 
+break on instance_id skip 1
+
 with /* XPLAN_ASH ASH_SESSION_SUMMARY_OTHER_ACTIVITY SQL_ID: &si */
 ash_base as
 (
@@ -5234,6 +5259,8 @@ column in_sequence_load     clear
 column px_worker_count      clear
 column px_worker_unique_count clear
 
+clear breaks
+
 set heading off
 
 column message format a50
@@ -5335,7 +5362,7 @@ column in_cursor_close      format a7 heading "IN|CURSOR|CLOSE"  &_IF_ORA11_OR_H
 column in_sequence_load     format a7 heading "IN|SEQ|LOAD"      &_IF_ORA112_OR_HIGHERP.print
 column top_level_sql_id     format a16 heading "TOP_LEVEL_SQL_ID" &_IF_ORA11_OR_HIGHERP.print
 
-break on instance_id
+break on instance_id skip 1
 
 with /* XPLAN_ASH ASH_SESSION_DETAILS_OTHER_ACTIVITY SQL_ID: &si */
 ash_base as
@@ -6613,7 +6640,7 @@ column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column min_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column max_tim_wait_ms &_SHOW_WAIT_TIMES.print
-break on instance_id
+break on instance_id skip 1
 
 select  /* XPLAN_ASH CONCURRENT_ACTIVITY_CONCURRENT_EXECUTION SQL_ID: &si */ /*+ NO_STATEMENT_QUEUING */
         instance_id
@@ -6630,8 +6657,12 @@ from
         (
                     select
                             &inst_id as instance_id
-                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state end as activity_class
-                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end      as activity
+                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state
+-- &_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+                            end as activity_class
+                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state
+&_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+                            end      as activity
                           , case when session_state = 'WAITING' then nullif(time_waited, 0) else null end                           as time_waited
                           , count(*) over ()                                                                                        as total_cnt
                     from
@@ -6758,7 +6789,7 @@ column in_cursor_close      format a7 heading "IN|CURSOR|CLOSE"  &_IF_ORA11_OR_H
 column in_sequence_load     format a7 heading "IN|SEQ|LOAD"      &_IF_ORA112_OR_HIGHERP.print
 column top_level_sql_id     format a16 heading "TOP_LEVEL_SQL_ID" &_IF_ORA11_OR_HIGHERP.print
 
-break on instance_id
+break on instance_id skip 1
 
 with /* XPLAN_ASH ASH_SQLID_DETAILS_CONCURRENT_ACTIVITY SQL_ID: &si */
 ash_base as
@@ -8502,6 +8533,23 @@ column total_read_mem_bytes          clear
 
 set heading off
 
+-- If you need to debug, comment the following line
+set termout off
+
+/* Determine whether skip 1 on DFO or not */
+
+column dfo_skip new_value _DFO_SKIP     &debug_internalp.print
+
+select
+        case when '&_IF_CROSS_INSTANCE' is null then 'skip 1' else '' end as dfo_skip
+from
+        dual
+;
+
+column dfo_skip clear
+
+set termout on
+
 column message format a50
 
 select
@@ -8558,7 +8606,9 @@ column min_as                  heading "AVERAGE AS|ACTIVE MIN"
 column process_count           heading "PROCESS|COUNT"
 column process_unique_count    heading "PROCESS|UNIQUE COUNT"
 
-break on dfo on set_count on assumed_degree on actual_degree
+break on dfo &_DFO_SKIP on set_count on assumed_degree on actual_degree
+
+undefine _DFO_SKIP
 
 /* This statement is effectively turned into a NOOP in versions below 11g */
 with /* XPLAN_ASH PARALLEL_DEGREE_INFO SQL_ID: &si */
@@ -8567,12 +8617,14 @@ as
 (
   select
           dfo
-        , max(set_count) as set_count
+        --, max(set_count) as set_count
+        , least(count(distinct tq_id), 2) as set_count
   from
           (
             select
                     to_number(cast(substr(p.object_node, 3, length(p.object_node) - 5) as varchar2(6)))  as dfo
-                  , case when p.operation = 'PX RECEIVE' then 2 else 1 end                               as set_count
+                  --, case when p.operation = 'PX RECEIVE' then 2 else 1 end                               as set_count
+                  , to_number(substr(p.object_node, 3 + length(p.object_node) - 5))                      as tq_id
             from
                     &plan_table p
             where
@@ -9072,7 +9124,7 @@ column is_adaptive_plan clear
 
 /* Determine if I/O figures / DFO / SET_ID info should be shown or not */
 /* Also determines if the ORD(er of execution) column should be shown or not */
-/* If we have Parallel Execution and option "no_ord_on_px" set to "YES" (default) or an adaptive plan (12xc) then don't show the ORD column */
+/* If we have Parallel Execution and option "no_ord_on_px" set to "YES" (default) or an adaptive plan (12c) then don't show the ORD column */
 
 column show_io_cols     new_value _SHOW_IO_COLS     &debug_internalp.print
 column show_12c_io_cols new_value _SHOW_12C_IO_COLS &debug_internalp.print
@@ -9101,11 +9153,12 @@ column show_dfo         clear
 set termout on
 
 column instance_id &_IF_CROSS_INSTANCE.print
-break on instance_id on dfo on set_id skip 1
+-- break on instance_id on dfo on set_id skip 1
+break on dfo on set_id skip 1 on instance_id
 
 column process format a64
-column dfo heading 'DFO|TREE' &_SHOW_DFO.print null NULL
-column set_id &_SHOW_SET_ID.print null NULL
+column dfo heading 'DFO|TREE' &_SHOW_DFO.print null N/A
+column set_id &_SHOW_SET_ID.print null N/A
 column cnt heading 'SAMPLE|COUNT'
 column cnt_cpu heading 'SAMPLE|COUNT|CPU'
 column cnt_other heading 'SAMPLE|COUNT|OTHER'
@@ -9148,7 +9201,9 @@ ash_base as
 &_IF_LOWER_THAN_ORA11202      , null as px_step_arg
         , cast(sample_time as date)                                                                                                                                     as sample_time
         , session_state
-        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end                                                            as activity
+        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state
+&_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+          end                                                            as activity
         , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(coalesce(program, 'NULL'), '^.*\((P[[:alnum:]][[:alnum:]][[:alnum:]])\)$', '\1', 1, 1, 'c') as process
         , count(*) over ()                                                                                                                                              as total_cnt
 &_IF_ORA112_OR_HIGHER         , nullif(pga_allocated, 0) as pga_allocated
@@ -9188,12 +9243,14 @@ set_count as
 (
   select
           dfo
-        , max(set_count) as set_count
+        --, max(set_count) as set_count
+        , least(count(distinct tq_id), 2) as set_count
   from
           (
             select
                     to_number(cast(substr(p.object_node, 3, length(p.object_node) - 5) as varchar2(6)))  as dfo
-                  , case when p.operation = 'PX RECEIVE' then 2 else 1 end                               as set_count
+                  --, case when p.operation = 'PX RECEIVE' then 2 else 1 end                               as set_count
+                  , to_number(substr(p.object_node, 3 + length(p.object_node) - 5))                      as tq_id
             from
                     &plan_table p
             where
@@ -10009,9 +10066,8 @@ ash_process_fmt as
           ash_process_prefmt
 )
 /* The final set including the Top N plan lines and Top N activities */
-select  /* XPLAN_ASH PARALLEL_SLAVE_ACTIVITY SQL_ID: &si */ /*+ NO_STATEMENT_QUEUING */
+select  /* XPLAN_ASH PARALLEL_SLAVE_ACTIVITY SQL_ID: &si */ /*+ optimizer_features_enable('11.1.0.7') NO_STATEMENT_QUEUING */
         /* 11.2.0.1 again generates a ORA-03113 during parse due to the COUNT(DISTINCT...), so falling back to 11.1.0.7 optimizer features */
-        /*+ optimizer_features_enable('11.1.0.7') */
         a.instance_id
       , a.dfo
       , a.set_id
@@ -10119,8 +10175,12 @@ from
         (
                     select
                             &inst_id as instance_id
-                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state end as activity_class
-                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end      as activity
+                          , case when session_state = 'WAITING' then nvl(wait_class, '<Wait Class Is Null>') else session_state
+-- &_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+                            end as activity_class
+                          , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state
+&_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+                            end      as activity
                           , case when session_state = 'WAITING' then nullif(time_waited, 0) else null end                           as time_waited
                           , count(*) over ()                                                                                        as total_cnt
                     from
@@ -10258,7 +10318,7 @@ column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column min_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column max_tim_wait_ms &_SHOW_WAIT_TIMES.print
-break on instance_id
+break on instance_id skip 1
 
 -- If you need to debug, comment the following line
 set termout off
@@ -10391,7 +10451,7 @@ column avg_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column med_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column min_tim_wait_ms &_SHOW_WAIT_TIMES.print
 column max_tim_wait_ms &_SHOW_WAIT_TIMES.print
-break on instance_id
+break on instance_id skip 1
 
 -- If you need to debug, comment the following line
 set termout off
@@ -10555,7 +10615,9 @@ ash_base as
 &_IF_ORA11_OR_HIGHER &_IF_LOWER_THAN_ORA112          - &sample_freq / 86400
 &_IF_ORA11_OR_HIGHER            - coalesce(sql_exec_start, to_date('&ash_min_sample_time', 'YYYY-MM-DD HH24:MI:SS'))) * 86400) / &sample_freq) * &sample_freq                                                                   as ash_prev_bucket
 &_IF_LOWER_THAN_ORA11         , trunc(round((cast(sample_time as date) - &sample_freq / 86400 - to_date('&ls', '&dm')) * 86400) / &sample_freq) * &sample_freq                                                                  as ash_prev_bucket
-        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end                                                                                              as activity
+        , case when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state
+&_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+          end                                                                                              as activity
         , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(coalesce(program, 'NULL'), '^.*\((P[[:alnum:]][[:alnum:]][[:alnum:]])\)$', '\1', 1, 1, 'c')                 as process
 &_IF_ORA112_OR_HIGHER         , delta_time
 &_IF_LOWER_THAN_ORA112        , to_number(null) as delta_time
@@ -11756,10 +11818,9 @@ ash_distrib_bkts_fmt as
           ash_distrib_bkts_prefmt
 )
 /* The final set including the Top N plan lines and Top N activities */
-select  /* XPLAN_ASH ACTIVITY_TIMELINE SQL_ID: &si */ /*+ NO_STATEMENT_QUEUING */
+select  /* XPLAN_ASH ACTIVITY_TIMELINE SQL_ID: &si */ /*+ optimizer_features_enable('11.1.0.7') NO_STATEMENT_QUEUING */
         /* Very long hard parse times with 11.2.0.1 optimizer features and S-ASH views */
         /* Therefore falling back to 11.1.0.7 optimizer features */
-        /*+ optimizer_features_enable('11.1.0.7') */
         nullif(a.instance_id, -1)    as instance_id
       , case when a.instance_id = -1 then 1 else 0 end as break_instance_id
       , a.duration_secs
@@ -12012,7 +12073,9 @@ ash_base as
 &_IF_ORA11_OR_HIGHER          , sql_plan_operation || ' ' || sql_plan_options                                                 as plan_operation
 &_IF_LOWER_THAN_ORA11         , '' as plan_operation
         , case
-          when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state end as event
+          when session_state = 'WAITING' then nvl(event, '<Wait Event Is Null>') else session_state
+&_IF_ORA12102_OR_HIGHER                            || case when in_inmemory_query = 'Y' then ' INMEMORY' end
+          end as event
         , coalesce(program, 'NULL')  as program
         , case when to_number(nvl('&ic', '0')) > 1 then &inst_id || '-' end || regexp_replace(coalesce(program, 'NULL'), '^.*\((P[[:alnum:]][[:alnum:]][[:alnum:]])\)$', '\1', 1, 1, 'c') as process
 &_IF_ORA11202_OR_HIGHER       , px_flags
@@ -13879,6 +13942,8 @@ undefine _IF_ORA11203_OR_HIGHER
 undefine _IF_LOWER_THAN_ORA11203
 undefine _IF_ORA12_OR_HIGHER
 undefine _IF_LOWER_THAN_ORA12
+undefine _IF_ORA12102_OR_HIGHER
+undefine _IF_LOWER_THAN_ORA12102
 undefine _IF_ORA11202_OR_HIGHERP
 undefine _IF_ORA112_OR_HIGHERP
 undefine _IF_ORA11_OR_HIGHERP
@@ -14101,6 +14166,8 @@ col ora11203_higher clear
 col ora11203_lower  clear
 col ora12_higher    clear
 col ora12_lower     clear
+col ora12102_higher clear
+col ora12102_lower  clear
 col global_ash clear
 col inst_id clear
 col plan_table clear
