@@ -29,7 +29,7 @@
 --              If you want the final query on Sys Metrics to show anything useful you need to use a minimum runtime of 120 seconds to ensure that there is at least a single 60 seconds snapshot period completed for SysMetric history
 --
 --              Optionally pass the connect string to use (no leading @ sign please), default is nothing, so whatever is configured as local connection gets used
---              Optionally pass the user, default is current_user
+--              Optionally pass the user, default is current_user. Don't use SYS resp. SYSDBA for this, but a dedicated user / schema
 --              Optionally pass the password of the (current) user, default is lower(user)
 --              Optionally pass the OS of this client ("Windows" or anything else), default is derived from V$VERSION (but this is then the database OS, not necessarily the client OS and assumes SQL*Plus runs on database server)
 --              Optionally pass the parallel degree to use when creating the objects, can be helpful on Enterprise Edition when creating very large objects, default is degree 1 (serial)
