@@ -7,8 +7,18 @@
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1
 --
+--              This tool is free but comes with no warranty at all - use at your own risk
+--
 -- Author:      Randolf Geist
 --              http://www.oracle-performance.de
+--
+-- Links:       You can find more information about this tool on my blog:
+--
+--              http://oracle-randolf.blogspot.com/search/label/io_benchmark
+--
+--              There is also a brief tutorial on my Youtube channel how to use:
+--
+--              https://www.youtube.com/c/RandolfGeist
 --
 -- Purpose:     Run concurrent sessions that perform physical random read and write I/O mostly, report achieved IOPS read and write rate
 --
@@ -40,7 +50,7 @@
 --              Optionally pass the parallel degree to use when creating the objects, can be helpful on Enterprise Edition when creating very large objects, default is degree 1 (serial)
 --              Optionally pass the type of performance report to generate, either "AWR" or "STATSPACK" or "NONE" for no report at all. Default is derived from V$VERSION, "Enterprise Edition" defaults to "AWR", otherwise "STATSPACK"
 --
--- Example:     @physical_wio_test_harness 4 NA 8000 "test_8k storage (buffer_pool recycle)" 120
+-- Example:     @max_write_iops_benchmark_harness 4 NA 8000 "test_8k storage (buffer_pool recycle)" 120
 --
 --              This means: Start four slaves, table size will be 8.000 rows / blocks each of the four tables / indexes and 80.000 rows (derived, 8.000 times ten) for the driving table created, use tablespace test_8k and put objects in recycle buffer cache, run the slaves for 120 seconds
 --

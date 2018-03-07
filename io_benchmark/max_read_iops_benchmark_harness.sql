@@ -7,8 +7,18 @@
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1
 --
+--              This tool is free but comes with no warranty at all - use at your own risk
+--
 -- Author:      Randolf Geist
 --              http://www.oracle-performance.de
+--
+-- Links:       You can find more information about this tool on my blog:
+--
+--              http://oracle-randolf.blogspot.com/search/label/io_benchmark
+--
+--              There is also a brief tutorial on my Youtube channel how to use:
+--
+--              https://www.youtube.com/c/RandolfGeist
 --
 -- Purpose:     Run concurrent sessions that perform physical read single block I/O mostly, report achieved IOPS rate
 --
