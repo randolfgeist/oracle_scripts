@@ -21,8 +21,10 @@ prompt This script asks for parameters to call then the actual benchmark script 
 prompt which runs concurrent sessions performing physical direct write multi block I/O mostly to report achieved I/O throughput rate
 @@common/interactive_common_prompt_1
 prompt
-prompt Currently the script supports up to 100.000.000 blocks per object, that is 800 GB at 8 KB block size per table per slave, so when using 8 slaves that is 6.400 GB.
-prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly, 32 slaves would mean 25 TB already.
+prompt Currently the script supports up to 100.000.000 blocks per object, that is 800 GB at 8 KB block size per table per slave,
+prompt so when using 8 slaves that is 6.400 GB.
+prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly,
+prompt 32 slaves would mean 25 TB already.
 prompt Of course this means you need that much space available in the target tablespace and the generation will take a while.
 prompt By modifying the script "max_write_throughput_benchmark_slave.sql" you can easily create objects larger than 100.000.000 blocks.
 prompt

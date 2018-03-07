@@ -27,17 +27,24 @@ prompt This write I/O will only happen if the DB writer is required to do so, so
 prompt to run the benchmark long enough to cycle through all groups which should force to write dirty blocks from cache to disk.
 prompt
 prompt If you want to maximize the single block reads:
-prompt Ideally, if you don't suspect caching effects on lower layers (or deliberately want to see their effects) you can use a very small buffer cache
-prompt e.g. a minimum sized KEEP or RECYCLE buffer cache (one granule) using the block size that you want to test (usually the default block size)
-prompt Then you don't need to create larger objects, the default of approx. 16.000 blocks per slave (two times 8.000 blocks for table and index) should be sufficient => 128 MB at 8 KB block size
-prompt At the default number of slaves = 8 this means approx. 1 GB of space required. The buffer cache should be much smaller, as already mentioned, which it usually is at one granule (less than 64 MB typically).
+prompt Ideally, if you don't suspect caching effects on lower layers (or deliberately want to see their effects)
+prompt you can use a very small buffer cache e.g. a minimum sized KEEP or RECYCLE buffer cache (one granule) using the block size
+prompt that you want to test (usually the default block size)
+prompt Then you don't need to create larger objects, the default of approx. 16.000 blocks per slave (two times 8.000 blocks
+prompt for table and index) should be sufficient => 128 MB at 8 KB block size
+prompt At the default number of slaves = 8 this means approx. 1 GB of space required. The buffer cache should be much smaller,
+prompt as already mentioned, which it usually is at one granule (less than 64 MB typically).
 @@common/interactive_common_prompt_2
-prompt Currently the script supports up to 100.000.000 blocks per object, that is 1.600 GB at 8 KB block size per table + index combination per slave, so when using 8 slaves that is 12.800 GB.
-prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly, 32 slaves would mean 50 TB already.
+prompt Currently the script supports up to 100.000.000 blocks per object, that is 1.600 GB at 8 KB block size per table + index
+prompt combination per slave, so when using 8 slaves that is 12.800 GB.
+prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly,
+prompt 32 slaves would mean 50 TB already.
 prompt Of course this means you need that much space available in the target tablespace and the generation will take a while.
-prompt By modifying the script "create_single_block_benchmark_objects.sql" you can easily create objects larger than 100.000.000 blocks, see the script header for comments in that regard.
+prompt By modifying the script "create_single_block_benchmark_objects.sql" you can easily create objects larger than
+prompt 100.000.000 blocks, see the script header for comments in that regard.
 prompt
-prompt You'll now be prompted several questions and shown some information about required and available space as well as current cache sizes.
+prompt You'll now be prompted several questions and shown some information about
+prompt required and available space as well as current cache sizes.
 prompt
 
 @@common/interactive_ask_user_drop

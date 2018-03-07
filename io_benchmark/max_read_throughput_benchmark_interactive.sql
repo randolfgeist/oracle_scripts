@@ -21,22 +21,30 @@ prompt This script asks for parameters to call then the actual benchmark script 
 prompt which runs concurrent sessions performing physical read multi block I/O mostly to report achieved I/O throughput rate
 @@common/interactive_common_prompt_1
 prompt
-prompt The script supports two modes: Synchronous I/O ("db file scattered read" / "cell multiblock physical read" on Exadata) and asynchronous (bypassing buffer cache) I/O ("direct path read" / "cell smart table/index scan" on Exadata)
-prompt For synchronous I/O please note that in order to max out the I/O using too small objects / a too large buffer cache will lead to logical instead of physicsl I/O.
+prompt The script supports two modes: Synchronous I/O ("db file scattered read" / "cell multiblock physical read" on Exadata)
+prompt and asynchronous (bypassing buffer cache) I/O ("direct path read" / "cell smart table/index scan" on Exadata)
+prompt For synchronous I/O please note that in order to max out the I/O using too small objects / a too large buffer cache will
+prompt lead to logical instead of physicsl I/O.
 prompt The objects created should be significantly larger than the buffer cache used for the tablespace assigned.
 prompt Since the asynchronous I/O "direct path read" bypasses the buffer cache by definition, it doesn't suffer from this problem.
 prompt
-prompt Ideally, if you don't suspect caching effects on lower layers (or deliberately want to see their effects) you can use a very small buffer cache
-prompt e.g. a minimum sized KEEP or RECYCLE buffer cache (one granule) using the block size that you want to test (usually the default block size)
+prompt Ideally, if you don't suspect caching effects on lower layers (or deliberately want to see their effects) you can use a very
+prompt small buffer cache e.g. a minimum sized KEEP or RECYCLE buffer cache (one granule) using the block size that you want to test
+prompt (usually the default block size)
 prompt By default the script creates a table of 1.000.000 blocks per slave => 8 GB at 8 KB block size
-prompt At the default number of slaves = 8 this means approx. 64 GB of space required. The buffer cache should be much smaller, as already mentioned, which it usually is at one granule (less than 64 MB typically).
+prompt At the default number of slaves = 8 this means approx. 64 GB of space required. The buffer cache should be much smaller, as
+prompt already mentioned, which it usually is at one granule (less than 64 MB typically).
 @@common/interactive_common_prompt_2
-prompt Currently the script supports up to 100.000.000 blocks per object, that is 800 GB at 8 KB block size per table per slave, so when using 8 slaves that is 6.400 GB.
-prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly, 32 slaves would mean 25 TB already.
+prompt Currently the script supports up to 100.000.000 blocks per object, that is 800 GB at 8 KB block size per table per slave,
+prompt so when using 8 slaves that is 6.400 GB.
+prompt Probably you want to use more slaves when testing with such a large buffer cache, so can scale up accordingly,
+prompt 32 slaves would mean 25 TB already.
 prompt Of course this means you need that much space available in the target tablespace and the generation will take a while.
-prompt By modifying the script "create_multi_block_benchmark_objects.sql" you can easily create objects larger than 100.000.000 blocks, see the script header for comments in that regard.
+prompt By modifying the script "create_multi_block_benchmark_objects.sql" you can easily create objects larger than
+prompt 100.000.000 blocks, see the script header for comments in that regard.
 prompt
-prompt You'll now be prompted several questions and shown some information about required and available space as well as current cache sizes.
+prompt You'll now be prompted several questions and shown some information about
+prompt required and available space as well as current cache sizes.
 prompt
 
 @@common/interactive_ask_user_drop

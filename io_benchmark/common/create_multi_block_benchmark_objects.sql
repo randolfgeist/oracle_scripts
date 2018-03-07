@@ -1,4 +1,13 @@
 -- Create benchmark objects
+--
+-- Note on creating larger objects than the current default:
+-- If you want to create objects larger than the current limit of 1e4 * 1e4 = 100.000.000 blocks
+-- you can modify the "level <= 1e4" predicate below accordingly
+-- Ideally modify the "cardinality(1e4)" hint, too, so that the optimizer knows about the data volume
+-- Note that there are two "generator" sources per CREATE TABLE, and in principle a cartesian join is performed
+-- and filtered afterwards on ROWNUM (serial) resp. ID (px)
+-- So check carefully how you want to change the number of rows per "generator" source
+--
 declare
   procedure exec_ignore_fail(p_sql in varchar2)
   as
