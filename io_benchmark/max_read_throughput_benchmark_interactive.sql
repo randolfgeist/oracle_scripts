@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_throughput_benchmark_interactive.sql
 --
--- Version:     1.0 (March 2018)
+-- Version:     1.01 (March 2018)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1
@@ -24,7 +24,7 @@ prompt
 prompt The script supports two modes: Synchronous I/O ("db file scattered read" / "cell multiblock physical read" on Exadata)
 prompt and asynchronous (bypassing buffer cache) I/O ("direct path read" / "cell smart table/index scan" on Exadata)
 prompt For synchronous I/O please note that in order to max out the I/O using too small objects / a too large buffer cache will
-prompt lead to logical instead of physicsl I/O.
+prompt lead to logical instead of physical I/O.
 prompt The objects created should be significantly larger than the buffer cache used for the tablespace assigned.
 prompt Since the asynchronous I/O "direct path read" bypasses the buffer cache by definition, it doesn't suffer from this problem.
 prompt

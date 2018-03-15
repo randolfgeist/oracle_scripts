@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_iops_benchmark_slave.sql
 --
--- Version:     1.0 (March 2018)
+-- Version:     1.01 (March 2018)
 --
 --              Tested with client version SQL*Plus 11.2
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1
@@ -68,3 +68,5 @@ undefine thread_id
 undefine testtype
 undefine wait_time
 undefine sync_or_async
+
+exit

@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_iops_benchmark_interactive.sql
 --
--- Version:     1.0 (March 2018)
+-- Version:     1.01 (March 2018)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1
@@ -26,7 +26,7 @@ prompt and asynchronous I/O ("db file parallel read" / "cell list of blocks phys
 prompt if supported on your configuration
 prompt
 prompt Please note that in order to max out the I/O using too small objects / a too large buffer cache will lead to
-prompt logical instead of physicsl I/O.
+prompt logical instead of physical I/O.
 prompt The objects created should be significantly larger than the buffer cache used for the tablespace assigned.
 prompt
 prompt Ideally, if you don't suspect caching effects on lower layers (or deliberately want to see their effects) you can use a very
