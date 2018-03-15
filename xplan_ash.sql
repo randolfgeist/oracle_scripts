@@ -10,8 +10,8 @@ doc
 --
 -- Script:       xplan_ash.sql
 --
--- Version:      4.23
---               June 2016
+-- Version:      4.24
+--               March 2018
 --
 -- Author:       Randolf Geist
 --               http://oracle-randolf.blogspot.com
@@ -453,6 +453,9 @@ doc
 --               This might be a good indication that something was broken or went wrong and could be worth further investigation.
 --
 -- Change Log:
+--
+--               4.24: March 2018
+--                    - Just a few minor fixes when dealing with DBA_HIST_ACTIVE_SESS_HISTORY based data
 --
 --               4.23: June 2016
 --                    - Finally corrected the very old and wrong description of "wait times" in the script comments, where it was talking about "in-flight" wait events but that is not correct
@@ -3401,7 +3404,7 @@ monitor_info1 as
 &use_monitor &_IF_ORA112_OR_HIGHER             , sum(physical_write_bytes)                                                             as write_bytes
 &use_monitor &_IF_LOWER_THAN_ORA112            , cast(NULL as number)                                                                  as write_bytes
 &use_no_monitor           , cast(NULL as number)       as write_bytes
-&use_monitor &_IF_ORA112_OR_HIGHER             , 100 - round(sum(io_interconnect_bytes) / nullif(sum(physical_read_bytes + physical_write_bytes), 0) * 100) as cell_offload_percent
+&use_monitor &_IF_ORA112_OR_HIGHER             , 100 - round(sum(io_interconnect_bytes) / nullif(sum(coalesce(physical_read_bytes, 0) + coalesce(physical_write_bytes, 0)), 0) * 100) as cell_offload_percent
 &use_monitor &_IF_LOWER_THAN_ORA112            , cast(NULL as number)                                                                  as cell_offload_percent
 &use_no_monitor           , cast(NULL as number)       as cell_offload_percent
 &use_monitor &_IF_ORA112_OR_HIGHER             , max(case when px_qcsid is null then error_message end)                                as error_message
@@ -4004,7 +4007,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -4763,7 +4766,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -5348,7 +5351,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -6002,7 +6005,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -6643,7 +6646,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -7483,7 +7486,7 @@ ash_data as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
@@ -8274,7 +8277,7 @@ from
                 , med_read_req_size
                 , avg_write_req_size
                 , med_write_req_size
-                , 100 - round(total_intercon_io_bytes / nullif((total_read_io_bytes + total_write_io_bytes), 0) * 100) as cell_offload_efficiency
+                , 100 - round(total_intercon_io_bytes / nullif((coalesce(total_read_io_bytes, 0) + coalesce(total_write_io_bytes, 0)), 0) * 100) as cell_offload_efficiency
                 , read_mem_bytes_per_sec
                 , read_io_bytes_per_sec
                 , write_io_bytes_per_sec
@@ -11159,7 +11162,7 @@ ash_data1 as
 &use_no_lateral                  , (select /*+ cardinality(1e5) */ level * &sample_freq as lvl from dual connect by level <= 1e5) dup
             where
                     ash.ash_prev_bucket < ash.ash_bucket - &sample_freq
-&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) / &sample_freq
+&use_no_lateral            and     dup.lvl <= (ash.ash_bucket - greatest(ash.ash_prev_bucket, -&sample_freq)) --/ &sample_freq
             --and     ash_bucket - lvl + &sample_freq >= 0
           )  ash
   where
