@@ -13,6 +13,10 @@ doc
 --               This script is identical to XPLAN_ASH.SQL but has simply the interactive prompt part commented,
 --               so that you can use it in an automated way as part of your own scripts
 --
+--               If that doesn't work as intended please check that you don't have any leftovers in the command line parameters
+--               1 to 10 from calling your own script possibly. Ideally define all 10 inputs when calling XPLAN_ASH_CMDLINE.SQL
+--               setting them explicitly to "" (blank) when you want XPLAN_ASH to make use of defaults
+--
 -- Version:      4.24
 --               March 2018
 --
