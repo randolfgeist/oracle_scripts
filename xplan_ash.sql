@@ -459,7 +459,7 @@ doc
 --
 --               4.23: June 2016
 --                    - Finally corrected the very old and wrong description of "wait times" in the script comments, where it was talking about "in-flight" wait events but that is not correct
---                      ASH performs a "fix-up" of the last 255 samples or so and updates them with the time waited, so these wait events are not "in-flight"
+--                      ASH performs a "fix-up" of the last 255 samples or so and updates them to the time waited, so these wait events are not "in-flight"
 --
 --                    - Removed some of the clean up code added in 4.22 to the beginning of the script, because it doesn't really help much but spooled script output always contained these error messages about non-existent column definitions being cleared
 --
