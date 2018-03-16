@@ -1838,7 +1838,7 @@ set termout on
 
 prompt
 prompt
-prompt XPLAN_ASH V4.23 (C) 2012-2016 Randolf Geist
+prompt XPLAN_ASH V4.24 (C) 2012-2018 Randolf Geist
 prompt http://oracle-randolf.blogspot.com
 prompt
 prompt Legend for graphs:
