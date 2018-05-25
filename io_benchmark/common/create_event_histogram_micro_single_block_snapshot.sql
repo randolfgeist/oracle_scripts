@@ -9,10 +9,10 @@ declare
     null;
   end;
 begin
-  exec_ignore_fail('drop table event_histogram_micro&ehm_instance');
+  exec_ignore_fail('drop table event_histogram_micro&&ehm_instance');
 
   execute immediate '
-create table event_histogram_micro&ehm_instance as select * from GV$EVENT_HISTOGRAM_MICRO where event in (''db file sequential read'', ''cell single block physical read'')
+create table event_histogram_micro&&ehm_instance as select * from GV$EVENT_HISTOGRAM_MICRO where event in (''db file sequential read'', ''cell single block physical read'')
 ';
 end;
 /

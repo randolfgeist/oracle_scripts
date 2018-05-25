@@ -78,7 +78,7 @@
 --
 --------------------------------------------------------------------------------
 
-set echo on timing on verify on time on
+set echo on timing on verify on time on linesize 200 tab off
 
 define default_testtype = "NA"
 define default_tab_size = "16000"

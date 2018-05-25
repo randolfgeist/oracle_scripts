@@ -12,7 +12,7 @@ select
           case
           when instr('$os', 'WINDOWS') > 0
           then 'host start &rep_name'
-          else 'host xdg-open &rep_name'
+          else 'host nohup xdg-open &rep_name'
           end
         else
           'rem Nothing to do'

@@ -3,11 +3,11 @@ prompt Overview of current tablespaces:
 
 column tablespace_name format a30
 column block_size format a5
-column free_mb format 9g999g999
+column free_mb format 9g999g999g999
 column free_blocks format 9g999g999g999
-column current_size_mb format 9g999g999
+column current_size_mb format 9g999g999g999
 column current_size_blocks format 9g999g999g999
-column max_size_mb format 9g999g999
+column max_size_mb format 9g999g999g999
 column max_size_blocks format 9g999g999g999
 
 with free_space as
