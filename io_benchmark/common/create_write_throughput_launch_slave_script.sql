@@ -1,12 +1,7 @@
 -- Determine what to use to spawn new processes, START on Windows and NOHUP on Unix
 column os new_value os noprint
 
-select
-       coalesce('&os_name', upper(rtrim(replace(substr(banner, 1, instr(banner, ':') - 1), 'TNS for ', '')))) as os
-from
-       v$version
-where
-       banner like 'TNS for %';
+select sys.dbms_utility.port_string as os from dual;
 
 store set .settings replace
 
@@ -17,7 +12,7 @@ spool launch_$slave_name._slave.sql
 
 select
         case
-        when instr('$os', 'WINDOWS') > 0
+        when instr('$os', 'WIN_NT') > 0
         then 'host start sqlplus $username/$pwd.$connect_string @$slave_name._slave ' || rownum || ' $testtype $wait_time $px_degree "$tbs" $tab_size'
         else 'host nohup sqlplus $username/$pwd.$connect_string @$slave_name._slave ' || rownum || ' $testtype $wait_time $px_degree "$tbs" $tab_size 2>&1 &'
         end

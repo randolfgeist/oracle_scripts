@@ -10,7 +10,7 @@ select
         when '$awr_statspack' in ('AWR', 'STATSPACK')
         then
           case
-          when instr('$os', 'WINDOWS') > 0
+          when instr('$os', 'WIN_NT') > 0
           then 'host start &rep_name'
           else 'host nohup xdg-open &rep_name'
           end
