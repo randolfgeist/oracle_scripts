@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_iops_benchmark_interactive.sql
 --
--- Version:     1.02 (September 2018)
+-- Version:     1.03 (April 2019)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2, 12.2.0.1 and 18.0.0.0
