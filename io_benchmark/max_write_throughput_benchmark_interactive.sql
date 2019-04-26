@@ -76,4 +76,7 @@ accept px_degree default '1' prompt 'Enter Parallel Degree to use for object cre
 
 @@common/interactive_connect_user
 
+prompt Command to execute benchmark:
+prompt @@max_write_throughput_benchmark_harness &num_slaves NA &num_rows "&tablespace_name" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"
+pause Press ENTER to start benchmark
 @@max_write_throughput_benchmark_harness &num_slaves NA &num_rows "&tablespace_name" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"

@@ -82,4 +82,7 @@ prompt Storage clause:                  &storage_clause
 
 @@common/interactive_connect_user
 
+prompt Command to execute benchmark:
+prompt @@max_write_iops_benchmark_harness &num_slaves NA &num_rows "&tablespace_name &storage_clause" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"
+pause Press ENTER to start benchmark
 @@max_write_iops_benchmark_harness &num_slaves NA &num_rows "&tablespace_name &storage_clause" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"

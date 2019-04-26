@@ -94,4 +94,7 @@ prompt I/O mode:                        &sync_or_async
 
 @@common/interactive_connect_user
 
+prompt Command to execute benchmark:
+prompt @@max_read_throughput_benchmark_harness &num_slaves &sync_or_async &num_rows "&tablespace_name &storage_clause" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"
+pause Press ENTER to start benchmark
 @@max_read_throughput_benchmark_harness &num_slaves &sync_or_async &num_rows "&tablespace_name &storage_clause" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"
