@@ -2,7 +2,7 @@
 --
 -- File name:   max_write_throughput_benchmark_interactive.sql
 --
--- Version:     1.02 (September 2018)
+-- Version:     1.03 (April 2019)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2, 12.2.0.1 and 18.0.0.0
@@ -76,4 +76,7 @@ accept px_degree default '1' prompt 'Enter Parallel Degree to use for object cre
 
 @@common/interactive_connect_user
 
+prompt Command to execute benchmark:
+prompt @@max_write_throughput_benchmark_harness &num_slaves NA &num_rows "&tablespace_name" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"
+pause Press ENTER to start benchmark
 @@max_write_throughput_benchmark_harness &num_slaves NA &num_rows "&tablespace_name" &num_seconds "&connect_string" &username "&pwd" "&os_name" &px_degree "&perf_report"

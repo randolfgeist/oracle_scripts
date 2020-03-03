@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_throughput_benchmark_slave.sql
 --
--- Version:     1.01 (March 2018)
+-- Version:     1.03 (April 2019)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2 and 12.2.0.1

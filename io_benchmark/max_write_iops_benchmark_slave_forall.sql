@@ -31,50 +31,42 @@ define wait_time = "&3 + 10"
 
 exec dbms_application_info.set_action('SQLPWIO&2')
 
--- This is required from 11.2 on to get the BYPASS_UJVC hint working below
-exec dbms_snapshot.set_i_am_a_refresh(true)
-
 declare
   cnt number;
   start_time date;
+  type nt is table of number;
+  fks nt;
 begin
+  select /*+
+              index(t_o)
+           */
+          id_fk
+    bulk collect
+    into fks
+    from
+          t_o;
   start_time := sysdate;
   cnt := 0;
   loop
-    update (
-    select /*+
-              bypass_ujvc
-              leading(t_o)
-              use_nl(t_i)
-              index(t_o)
-              index(t_i)
-          */
-          t_i.n
-          --into n
-    from
-          t_o
-        , t_i&tabname t_i
-    where
-          t_o.id_fk = t_i.id
-    )
-    set n = n + decode(mod(n, 2), 0, -1, 1)
-    ;
+    forall rec in fks.first..fks.last
+      update t_i&tabname t_i
+      -- 12.2.0.1 optimizes the former n = id.fk
+      -- subsequent changes to the same value
+      -- do not cause a "db block change"
+      -- and as a consequence less undo / redo generated
+      set n = n + decode(mod(n, 2), 0, -1, 1)
+      where id = fks(rec);
+    -- insert into timings(testtype, thread_id, ts) values ('&testtype', &thread_id, systimestamp);
     cnt := cnt + 1;
-    --if mod(cnt, 100) = 0 then
     exit when (sysdate - start_time) * 86400 >= &wait_time;
-    --end if;
     if cnt > 100 then
       commit write batch nowait;
-      --exit when (sysdate - start_time) * 86400 >= &wait_time;
       cnt := 0;
     end if;
-    -- insert into timings(testtype, thread_id, ts) values ('&testtype', &thread_id, systimestamp);
   end loop;
   commit write batch nowait;
 end;
 /
-
-exec dbms_snapshot.set_i_am_a_refresh(false)
 
 undefine tabname
 undefine thread_id
