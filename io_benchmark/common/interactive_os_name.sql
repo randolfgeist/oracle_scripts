@@ -4,4 +4,4 @@ prompt Supported O/S is either "Windows" or "Unix", leave blank for default (if 
 prompt Default is derived from V$VERSION, but this is the database server O/S, not necessarily the client O/S where this script runs on
 prompt
 
-accept os_name prompt 'Enter O/S where this script is executed, Windows or Unix (default derived from V$VERSION): '
+accept os_name prompt 'Enter O/S where this script is executed, Windows or Unix (default derived via DBMS_UTILITY): '

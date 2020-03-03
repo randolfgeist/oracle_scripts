@@ -2,7 +2,7 @@
 --
 -- File name:   max_read_iops_benchmark_harness.sql
 --
--- Version:     1.02 (September 2018)
+-- Version:     1.03 (April 2019)
 --
 --              Tested with client version SQL*Plus 11.2.0.1 and 12.2.0.1
 --              Tested with server versions 11.2.0.4, 12.1.0.2, 12.2.0.1 and 18.0.0.0
@@ -43,7 +43,7 @@
 --              Optionally pass the connect string to use (no leading @ sign please), default is nothing, so whatever is configured as local connection gets used
 --              Optionally pass the user, default is current_user. Don't use SYS resp. SYSDBA for this, but a dedicated user / schema
 --              Optionally pass the password of the (current) user, default is lower(user)
---              Optionally pass the OS of this client ("Windows" or anything else), default is derived from V$VERSION (but this is then the database OS, not necessarily the client OS and assumes SQL*Plus runs on database server)
+--              Optionally pass the OS of this client ("Windows" or anything else), default is derived via DBMS_UTILITY.PORT_STRING (but this is then the database OS, not necessarily the client OS and assumes SQL*Plus runs on database server)
 --              Optionally pass the parallel degree to use when creating the objects, can be helpful on Enterprise Edition when creating very large objects, default is degree 1 (serial)
 --              Optionally pass the type of performance report to generate, either "AWR" or "STATSPACK" or "NONE" for no report at all. Default is derived from V$VERSION, "Enterprise Edition" defaults to "AWR", otherwise "STATSPACK"
 --

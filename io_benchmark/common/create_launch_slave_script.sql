@@ -1,7 +1,7 @@
 -- Determine what to use to spawn new processes, START on Windows and NOHUP on Unix
 column os new_value os noprint
 
-select sys.dbms_utility.port_string as os from dual;
+select coalesce(case when '&OS_NAME' = 'WINDOWS' then 'WIN_NT' else '&OS_NAME' end, sys.dbms_utility.port_string) as os from dual;
 
 store set .settings replace
 
